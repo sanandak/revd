@@ -431,7 +431,7 @@ PUB DO_SOMETHING_USEFUL | rxByte, response, idx
                                  uartState := WAITING_FOR_START
     
 
-     
+                       
   edgeDetector := ((edgeDetector << 1) | INA[GPS_PPS] ) & %11    
   case edgeDetector 
     %01 : ' rising edge -> grab phsb
@@ -829,7 +829,7 @@ PUB GET_PARAMETERS_FROM_EEPROM
   sourceB    :=  PEBBLE.READ_EEPROM_LONG(SOURCE_B_ADDRESS)
   sourceC    :=  PEBBLE.READ_EEPROM_LONG(SOURCE_C_ADDRESS)
   sourceD    :=  PEBBLE.READ_EEPROM_LONG(SOURCE_D_ADDRESS)
-
+  
 PUB STORE_PARAMETERS_TO_EEPROM
   PEBBLE.WRITE_EEPROM_LONG(SPS_ADDRESS, sampleRate)
   PEBBLE.WRITE_EEPROM_LONG(GAIN_A_ADDRESS, gainA)
@@ -842,13 +842,12 @@ PUB STORE_PARAMETERS_TO_EEPROM
   PEBBLE.WRITE_EEPROM_LONG(SOURCE_D_ADDRESS, sourceD)
   
 PUB CHECK_DEFAULT_PARAMS | eepromValue
-
   eepromValue := PEBBLE.READ_EEPROM_LONG(GPB_ADDRESS)
   if eepromValue == $DEAD_BEEF
     UARTS.STR(DEBUG, string(13,"$PSMSG, Factory parameters already set."))
   else
     WRITE_DEFAULT_PARAMS_TO_EEPROM
-
+  
 PUB WRITE_DEFAULT_PARAMS_TO_EEPROM
   sampleRate := 1000
   gainA      :=    1
