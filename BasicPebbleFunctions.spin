@@ -93,25 +93,27 @@ CON ' Shared SPI bus pins
 CON ' DAC constants
   WRITE_AND_UPDATE = $0030_0000  ' code for DAC that performs write and update
 
-CON ' DISPLAY CONSTANTS
-  CLEAR_DISPLAY  = %00_0000_0001
-  RETURN_HOME    = %00_0000_0010
-  ENTRY_MODE_0   = %00_0000_0100  ' auto-DEincrement no shift
-  ENTRY_MODE_1   = %00_0000_0101  ' auto-DEcrement   shift display RIGHT
-  ENTRY_MODE_2   = %00_0000_0110  ' auto-INcrement   no shift
-  ENTRY_MODE_3   = %00_0000_0111  ' auto-INcrememnt  shift display LEFT
-  DISPLAY_ON     = %00_0000_1101  ' display ON   cursor OFF  blinking OFF
-  DISPLAY_OFF    = %00_0000_1000  ' display OFF
-  FUNCTION_SET   = %00_0011_1000  ' set to english
-  CURSOR_SHIFT_0 = %00_0001_0000  ' shift CURSOR to the left
-  CURSOR_SHIFT_1 = %00_0001_0100  ' shift CURSOR to the right
-  CURSOR_SHIFT_2 = %00_0001_1000  ' shift DISPLAY to the left
-  CURSOR_SHIFT_3 = %00_0001_1100  ' shift DISPLAY to the right
-  SET_CGRAM_ADD  = %00_0100_0000  ' lower 6 bits of this command should be the address
-  SET_DDRAM_ADD  = %00_1000_0000  ' lower 7 bits of this command should be the address
-  DEGREES        = %1101_1111
-  TICK           = %0010_0111
-  BLOCK          = %1111_1111     ' all pixel high
+CON ' OLED CONSTANTS
+  CLEAR_DISPLAY   = %00_0000_0001
+  RETURN_HOME     = %00_0000_0010
+  ENTRY_MODE_0    = %00_0000_0100  ' auto-DEincrement no shift
+  ENTRY_MODE_1    = %00_0000_0101  ' auto-DEcrement   shift display RIGHT
+  ENTRY_MODE_2    = %00_0000_0110  ' auto-INcrement   no shift
+  ENTRY_MODE_3    = %00_0000_0111  ' auto-INcrememnt  shift display LEFT
+  DISPLAY_ON      = %00_0000_1101  ' display ON   cursor OFF  blinking OFF
+  DISPLAY_OFF     = %00_0000_1000  ' display OFF
+  FUNCTION_SET    = %00_0011_1000  ' set to english
+  CURSOR_SHIFT_0  = %00_0001_0000  ' shift CURSOR to the left
+  CURSOR_SHIFT_1  = %00_0001_0100  ' shift CURSOR to the right
+  CURSOR_SHIFT_2  = %00_0001_1000  ' shift DISPLAY to the left
+  CURSOR_SHIFT_3  = %00_0001_1100  ' shift DISPLAY to the right
+  SET_CGRAM_ADD   = %00_0100_0000  ' lower 6 bits of this command should be the address
+  SET_DDRAM_ADD   = %00_1000_0000  ' lower 7 bits of this command should be the address
+  DEGREES         = %1101_1111
+  TICK            = %0010_0111
+  BLOCK           = %1111_1111     ' all pixel high
+  WRITE_TO_CGRAM  = %10
+  READ_FROM_CGRAM = %11
 
 CON ' directly wired pins
   REED_SWITCH       = 15
@@ -257,23 +259,64 @@ VAR
   byte mag[6]
   byte rtcTime[7]
   
+DAT ' characters for OLED
+PLOT_1 byte   %000_11111 
+       byte   %000_11111
+       byte   %000_00000
+       byte   %000_11111
+       byte   %000_11111
+       byte   %000_00000
+       byte   %000_11111
+       byte   %000_11111
+
+PLOT_2 byte   %000_11111
+       byte   %000_11111
+       byte   %000_00000
+       byte   %000_11111
+       byte   %000_11111
+       byte   %000_00000
+       byte   %000_00000
+       byte   %000_00000
+              
+PLOT_3 byte   %000_00000 
+       byte   %000_00000
+       byte   %000_00000
+       byte   %000_11111
+       byte   %000_11111
+       byte   %000_00000
+       byte   %000_11111
+       byte   %000_11111
+              
+PLOT_4 byte   %000_11111 
+       byte   %000_11111
+       byte   %000_00000
+       byte   %000_00000
+       byte   %000_00000
+       byte   %000_00000
+       byte   %000_00000
+       byte   %000_00000
+              
+PLOT_5 byte   %000_00000 
+       byte   %000_00000
+       byte   %000_00000
+       byte   %000_11111
+       byte   %000_11111
+       byte   %000_00000
+       byte   %000_00000
+       byte   %000_00000
+              
+PLOT_6 byte   %000_00000 
+       byte   %000_00000
+       byte   %000_00000
+       byte   %000_00000
+       byte   %000_00000
+       byte   %000_00000
+       byte   %000_11111
+       byte   %000_11111
+              
+              
 PUB INIT : response
-' setup the shared SPI
-  DIRA[RADIO_CS] := 1
-  DIRA[OLED_CS]  := 1
-  DIRA[DAC_CS]   := 1
-  
-  OUTA[RADIO_CS] := 1
-  OUTA[OLED_CS]  := 1
-  OUTA[DAC_CS]   := 1
-
-  DIRA[SHARED_MOSI] := 1
-  OUTA[SHARED_MOSI] := 0
-
-  DIRA[SHARED_MISO] := 0
-  
-  DIRA[SHARED_SCLK] := 1
-  OUTA[SHARED_SCLK] := 0
+  DIRA~ ' set everything to input
 
 ' setup the I2C bus
   I2C.INIT(SDA, SCL)
@@ -307,8 +350,26 @@ PUB SET_EXPANDER_TO_LOW_POWER : response
   EXPANDER_WRITE(EXPANDER_1, expVal1)
   EXPANDER_WRITE(EXPANDER_2, expVal2)
 
+' we don't use the SRAM so make sure it's not selected
   DIRA[SRAM_CS]  := 1           ' hold SRAM in RESET
   OUTA[SRAM_CS]  := 1           ' hold SRAM in RESET
+
+' setup the shared SPI
+  DIRA[RADIO_CS] := 1
+  DIRA[OLED_CS]  := 1
+  DIRA[DAC_CS]   := 1
+  
+  OUTA[RADIO_CS] := 1
+  OUTA[OLED_CS]  := 1
+  OUTA[DAC_CS]   := 1
+
+  DIRA[SHARED_MOSI] := 1
+  OUTA[SHARED_MOSI] := 0
+
+  DIRA[SHARED_MISO] := 0
+  
+  DIRA[SHARED_SCLK] := 1
+  OUTA[SHARED_SCLK] := 0
 
 PUB LEDS_ON
 ' turn the LEDS on the I2C expander ON by setting the bits LOW
@@ -404,7 +465,7 @@ PUB MAG_ACC_OFF
   WRITE_TO_OLED(0, 1, string("MAG/ACC OFF     "))
 
 PUB OLED_ON
-' Turn off the switch that allows 3.3V power to pass to the OLED
+' Turn on the switch that allows 3.3V power to pass to the OLED
   expVal2 |= OLED_EN  ' and turn on  OLED
   EXPANDER_WRITE(EXPANDER_2, expVal2)
   PAUSE_MS(1)
@@ -561,8 +622,6 @@ PRI OLED_GOTO_XY(xPos, yPos) | position
 PRI OLED_WRITE_COMMAND(dataOut) | dataIn
   dataIn := 0
 
-  ' optimize code for 10-bit case by unrolling loop, if other bit lengths occur frequently unroll as well
-
   ' lower CS line
   OUTA[OLED_CS]     := 0                                    ' lower CS line
 
@@ -594,7 +653,7 @@ PRI OLED_WRITE_COMMAND(dataOut) | dataIn
   ' raise CS on exit
   OUTA[OLED_CS]     := 1                                    ' raise CS line
   
-  ' at this point, the data has been written and read, return result
+  ' at this point, the data have been written and read, return result
   return ( dataIn )            
 
 PRI OLED_WRITE_STRING(stringPtr)
@@ -775,8 +834,7 @@ PUB SLEEP(mainCogId) | i
 ' switch clock to rcslow ' using the gadget gangster board as power supply
 '  _rcslow_prop          ' this uses: 1.5mA
 '  _rcfast_prop           ' this uses: 1.5mA
-  _rcxtal
-  DIRA~
+  _slow_prop
 
 PUB WAIT_FOR_TIME(modValue)
   repeat
@@ -788,6 +846,34 @@ PUB WAIT_FOR_TIME(modValue)
   INIT
   OLED_ON
   WRITE_TO_OLED(0,1,string("Waking System."))
+
+PUB SWITCHED_ON 
+  if INA[REED_SWITCH] == 0      ' is button "pressed"?
+    waitcnt(1_000 + cnt)   ' wait for .1 ms - debounce
+    if INA[REED_SWITCH] == 0    ' is button still "pressed"
+      return TRUE
+    else
+      return FALSE
+      
+  else
+    PAUSE_MS(100)
+    return FALSE
+
+PUB WAKE_UP
+    ' indicate that we've caught the complete button press
+  LEDS_ON
+  
+  ' return to full speed
+  _rc_to_fast_prop
+  INIT
+  OLED_ON
+  WRITE_TO_OLED(0,1,string("Waking System."))
+  
+  repeat 10
+    PAUSE_MS(50)
+    LEDS_OFF
+    PAUSE_MS(50)
+    LEDS_ON
 
 PUB WAIT_FOR_WAKE_UP
 
@@ -803,24 +889,8 @@ PUB WAIT_FOR_WAKE_UP
     else
       LED1_OFF
 
-  ' indicate that we've caught the complete button press
-  LEDS_ON
+  WAKE_UP
   
-  ' return to full speed
-  _rc_to_fast_prop
-  INIT
-  OLED_ON
-  WRITE_TO_OLED(0,1,string("Waking System."))
-  
-  repeat 10
-    PAUSE_MS(50)
-    LEDS_OFF
-    PAUSE_MS(50)
-    LEDS_ON
-
-
-  return
-
 PUB SHORT_INPUTS(ch)
 ' this method shorts the inputs on the given channel and sets gain to 0
 
@@ -879,12 +949,11 @@ PRI WRITE_PGA(ch, pgaData) | tmp
   expVal1 |= PGA_D_CS | PGA_C_CS | PGA_B_CS | PGA_A_CS '%1111_0000
   EXPANDER_WRITE(EXPANDER_1, expVal1)
 
-  DIRA[SHARED_SCLK] := 0        ' set clock to input to avoid conflict with other cogs
-  DIRA[SHARED_MOSI] := 0        ' set MOSI to input to avoid conflict with other cogs
-   
-PUB UPDATE_OLED
-' this method can be used to update the oled
-  return
+
+PUB TO_HEX(value)
+'' Print a hexadecimal number
+  value <<= 7 << 2
+  return lookupz((value <-= 4) & $F : "0".."9", "A".."F")
   
 PRI _rcslow_prop
 '' put propeller into slowest power save speed (using internal oscilator)
@@ -895,11 +964,6 @@ PRI _rcfast_prop
 '' put propeller into ~12Mhz (using internal oscilator)
 
   clkset(%0_0_0_00_000, 12_000_000)                                             ' ~12MHz no PLL
-  
-PRI _rcxtal
-'' use external oscillator with NO PLL ~6.25Mhz for this project
-
-  clkset(%0_0_1_01_010, 6_250_000)                                             ' ~6.25MHz no PLL
   
 PRI _rc_to_slow_prop
 '' put propeller into slowest power save speed (using XTAL), intended to be used after propeller was put in rcslow/rcfast mode
@@ -923,9 +987,9 @@ PRI _rc_to_fast_prop
   clkset(%0_1_1_01_111, 100_000_000)                                             ' 80MHz
 
 PRI _slow_prop
-'' put propeller into slowest power save speed (using XTAL)
+'' put propeller into slowest power save speed using XTAL
 
-  clkset(%0_0_1_01_010, 6_250_000)                                              ' 5MHz no PLL 
+  clkset(%0_0_1_01_010, 6_250_000)                                              ' 6.25MHz no PLL 
     
 PRI _slow_to_med_prop
 '' put propeller into a medium speed (20MHz), intended to be used after propeller was put in slow mode

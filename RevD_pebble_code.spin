@@ -5,7 +5,7 @@
 '*
 '* PGB
 '* 3 October 2014 - based on RevC_pebble_code
-'* sak - 10 Nov.
+'*
 '*
 '**************************************************************
 CON ' Clock mode settings
@@ -30,13 +30,16 @@ CON ' GPS constants including bit on I2C expander
   BYTES_IN_GPS_BUFFER = 1024
 
 CON ' Uart command constants
-  KILL              = "K"
-  SAMPLE_RATE       = "S"
-  GAIN              = "G"
-  REBOOT_GUMSTIX    = "R"
-  SOURCE            = "O"
-  SHUTDOWN_SYSTEM   = "D"
-  WRITE_TO_OLED     = "W"
+    KILL                  = "K"
+    SHUTDOWN_SYSTEM       = "D"
+    SOFT_REBOOT_GUMSTIX   = "S"
+    HARD_REBOOT_GUMSTIX   = "H"
+    PUT_SYSTEM_TO_SLEEP   = "L"
+    RATE                  = "R"
+    QUERY                 = "Q"
+    GAIN                  = "G"
+    SOURCE                = "O"
+    WRITE_TO_OLED         = "W"
 
   #0, WAITING_FOR_START, WAITING_FOR_END, PROCESS_BUFFER
   
@@ -143,6 +146,7 @@ CON ' UART ports and pin numbers - DEBUG, GPS, MSP
   SPACE             =     32
   TAB               =      9
   COLON             =     58
+  COMMA             =     44
   MAX_COMMANDS      =     10
   
   DEBUG_RX_FROM     = 31
@@ -158,7 +162,8 @@ CON ' main state machine states
 
 CON ' EEPROM constants
   EEPROM_BASE      = $8000             ' set to 32,768 = 32k
-
+  
+  GPB_ADDRESS      = EEPROM_BASE +  0
   SPS_ADDRESS      = EEPROM_BASE +  4
   GAIN_A_ADDRESS   = EEPROM_BASE +  8
   GAIN_B_ADDRESS   = EEPROM_BASE + 12
@@ -180,12 +185,9 @@ DAT ' oled messages
   sleepMsg   byte   "Sleeping System.", 0
   wakeMsg    byte   "Waking System.  ", 0
   magnetMsg  byte   "Wake with Magnet", 0
+  euiMsg     byte   "                ", 0
+  gpsMsg     byte   "GPS:            ", 0
 
-DAT ' uart commands
-  rebootMsg   byte "reboot", 0
-  shutdownMsg byte "shutdownMsg", 0
-  spsMsg      byte "samplerate", 0
-  
 OBJ                                  
   UARTS     : "FullDuplexSerial4portPlus_0v3"       '1 COG for 3 serial ports
   NUM       : "Numbers"                             'Include Numbers object for writing numbers to debuginal
@@ -194,19 +196,19 @@ OBJ
 
 VAR
   byte mainCogId, serialCogId, adcCogId, slaveCogId
+  byte clockSetYet
   byte mainState, edgeDetector
   byte inUartBuf[UART_SIZE], inUartIdx, ptrIdx, uartState, inUartPtr[MAX_COMMANDS]
+  byte oLedBuf[20] ' set aside some room for the oled 
 
-  word setYear, setMon, setDay, setHour, setMin, setSec, setDow
-  word year, month, day, hour, minute, second, utcValid
-  word sampleRate
+  word year, month, day, hour, minute, second, utcValid, gpsFix
   ' ubxBufferAddress is the HUB memory location of gps data stored by ubx object
   long ubxBufferAddress
-  long gainA, gainB, gainC, gainD, sourceA, sourceB, sourceC, sourceD ' these are longs because that's how they are stored in the EEPROM
+  long sampleRate, gainA, gainB, gainC, gainD, sourceA, sourceB, sourceC, sourceD ' these are longs because that's how they are stored in the EEPROM
   long rtcAddr        ' hub address of 7 bytes containing the RTC time
   long euiAddr        ' hub address of 48 bytes containing the unique ID for this device
   ' keep these in order  ymd, hms, cntsAtPPS are populated in the main cog but need to be passed down to the SPIslave cog
-  long ymd, hms, cntsAtPPS1, cntsTemp
+  long ymd, hms, cntsAtPPS1, cntsTemp, accuracy
   ' the next 2 line refers to the HUB storage where things sit before be shifted out to the gumstix
   long gpsDataToWrite, gpsBuffer[BYTES_IN_GPS_BUFFER]
   long slaveBufCMD, slaveBuffer[LONGS_IN_SLAVE_BUFFER]       
@@ -218,10 +220,6 @@ VAR
 
 PUB MAIN | idx, response, measureTime
 ' the main method here is a simple state machine
-  DIRA~ ' set everything to input
-
-  DIRA[20] := 1
-  DIRA[19] := 1
 
   adcCogId    := -1
   slaveCogId  := -1
@@ -229,124 +227,62 @@ PUB MAIN | idx, response, measureTime
   mainCogId   := cogid
   
   PEBBLE.INIT
-  PEBBLE.GUMSTIX_OFF
+  LAUNCH_SERIAL_COG             ' handle the 2 serial ports- debug and GPS
 
 
   PEBBLE.LED1_ON
   PEBBLE.OLED_ON
   PEBBLE.WRITE_TO_OLED(0, 1, @bootMsg)
 
-  LAUNCH_SERIAL_COG             ' handle the 2 serial ports- debug and GPS
-  'STORE_DEFAULT_PARAMS_TO_EEPROM
+  PAUSE_MS(2000)
+  UARTS.STR(DEBUG, string(13, "$PSMSG, Booting geoPebble: "))
+  PRINT_EUI
+  TURN_ON_GPS
+
+  PEBBLE.WRITE_TO_OLED(0, 1, string("Turning on GPS"))
+  PAUSE_MS(2000)
+
+  PEBBLE.WRITE_TO_OLED(0, 1, string("Loading Settings"))
+  GET_AND_PRINT_PARAMETERS
+
+  PAUSE_MS(2000)
+  clockSetYet := FALSE
+  
+  idx := 0
+  repeat 
+    edgeDetector := ((edgeDetector << 1) | INA[GPS_PPS] ) & %11    
+    case edgeDetector 
+      %01 : ' rising edge -> grab phsb
+        idx++
+        cntsTemp := CNT - PHSB
+        UPDATE_TIME_AND_DATE
+        PRINT_TIME_AND_DATE
+        UARTS.PUTC(DEBUG, COMMA)
+        UARTS.DEC(DEBUG, idx)
+        PEBBLE.EXPANDER_TOGGLE_BIT(PEBBLE#EXPANDER_2,PEBBLE#LED1)
+        PEBBLE.EXPANDER_TOGGLE_BIT(PEBBLE#EXPANDER_2,PEBBLE#LED2)
+      %10 : ' falling edge now we can reset phsb since it won't increment until PPS goes high again
+        PHSB := 0
+      
+    repeat
+      response := UBX.READ_AND_PROCESS_BYTE(FALSE)
+    until response == -1 OR response == UBX#RXMRAW
+    
+  until clockSetYet OR idx == 120
+
+  if clockSetYet == FALSE
+    UARTS.STR(DEBUG, string(13, "$PSMSG, Unable to get GPS lock or set RTC."))
+  
 
   ' give some indication that we're booting and alive
   repeat 10 
     PAUSE_MS(150)
     PEBBLE.EXPANDER_TOGGLE_BIT(PEBBLE#EXPANDER_2,PEBBLE#LED1)
     PEBBLE.EXPANDER_TOGGLE_BIT(PEBBLE#EXPANDER_2,PEBBLE#LED2)
-{  
-  setDow  :=    4
-  setYear := 2014
-  setMon  :=   11
-  setDay  :=    6
-  setHour :=   21
-  setMin  :=   46
-  setSec  :=   30
-
-  PEBBLE.SET_RTC_TIME(setYear, setMon, setDay, setHour, setMin, setSec, setDow)
-  UARTS.STR(DEBUG, string(13,"Setting RTC time: "))
-  UARTS.DEC(DEBUG, setYear)
-  UARTS.PUTC(DEBUG, "-")
-  UARTS.DEC(DEBUG, setMon)
-  UARTS.PUTC(DEBUG, "-")
-  UARTS.DEC(DEBUG, setDay)
-  UARTS.PUTC(DEBUG, SPACE)
-  UARTS.DEC(DEBUG, setHour)
-  UARTS.PUTC(DEBUG, COLON)
-  UARTS.DEC(DEBUG, setMin)
-  UARTS.PUTC(DEBUG, COLON)
-  UARTS.DEC(DEBUG, setSec)
-  UARTS.PUTC(DEBUG, SPACE)
-  UARTS.DEC(DEBUG, setDow)
-
-  repeat
-    UARTS.STR(DEBUG, string(13, "Going to sleep.",13))
-    PAUSE_MS(500)
-    PEBBLE.SLEEP(mainCogId)
-    PEBBLE.WAIT_FOR_TIME(2)
-    LAUNCH_SERIAL_COG                     ' handle the 2 serial ports- debug, and GPS
-    PAUSE_MS(200)
-    UARTS.STR(DEBUG, string(13, "System booted and ready for action.",13))
-    PEBBLE.WRITE_TO_OLED(0, 1, @bootMsg)
-    repeat 
-      rtcAddr := PEBBLE.READ_RTC_TIME
-      UARTS.STR(DEBUG, string(13,"Date and time: "))
-      UARTS.DEC(DEBUG, BYTE[rtcAddr][6]+2000)
-      UARTS.PUTC(DEBUG, SPACE)
-      UARTS.DEC(DEBUG, BYTE[rtcAddr][5])
-      UARTS.PUTC(DEBUG, SPACE)
-      UARTS.DEC(DEBUG, BYTE[rtcAddr][4])
-      UARTS.PUTC(DEBUG, SPACE)
-      UARTS.DEC(DEBUG, BYTE[rtcAddr][3])
-      UARTS.PUTC(DEBUG, SPACE)
-      UARTS.DEC(DEBUG, BYTE[rtcAddr][2])
-      UARTS.PUTC(DEBUG, SPACE)
-      UARTS.DEC(DEBUG, BYTE[rtcAddr][1])
-      UARTS.PUTC(DEBUG, SPACE)
-      UARTS.DEC(DEBUG, BYTE[rtcAddr][0])
-      UARTS.PUTC(DEBUG, SPACE)
-      PAUSE_MS(500)
-    until BYTE[rtcAddr][0] == 15    
- } 
-
-  ' Turn off the LEDs and go to sleep
+  
   PEBBLE.LED1_OFF
   PEBBLE.LED2_OFF
   
-  UARTS.PUTC(DEBUG, CL)
-  PAUSE_MS(1000)
-  UARTS.STR(DEBUG, string(13, "Booting geoPebble RevD...."))
-  bytefill(@euiAddr, 0, 8)
-  euiAddr := PEBBLE.READ_EUI
-
-  UARTS.STR(DEBUG, string(13, "SN: "))
-
-  repeat 5
-    UARTS.HEX(DEBUG, BYTE[euiAddr++], 2)
-    UARTS.PUTC(DEBUG, COLON)
-  UARTS.HEX(DEBUG, BYTE[euiAddr], 2)
-
-
-  PEBBLE.MAG_ACC_ON
-  PEBBLE.LSM_INIT
-  
-  idx := 0
-  measureTime := cnt + clkfreq
-{  repeat
-    UARTS.PUTC(DEBUG, 13)
-    waitcnt(measureTime +=  CONSTANT(100_000_000/25))
-    'if idx // 20 == 0
-    '  UARTS.STR(DEBUG, string(13, "ACCx",9,"ACCy",9,"ACCz",9,"MAGx",9,"MAGy",9,"MAGz",9,"TEMP",13))
-    'idx++
-    UARTS.DEC(DEBUG, PEBBLE.GET_ACC_X)
-    UARTS.PUTC(DEBUG, TAB)
-'    PAUSE_MS(1)
-    UARTS.DEC(DEBUG, PEBBLE.GET_ACC_Y)
-    UARTS.PUTC(DEBUG, TAB)
-'    PAUSE_MS(1)
-    UARTS.DEC(DEBUG, PEBBLE.GET_ACC_Z)
-    UARTS.PUTC(DEBUG, TAB)
-'    PAUSE_MS(1)
-
-    PEBBLE.READ_MAG             ' we need to read the mag before the others are populated.  
-    UARTS.DEC(DEBUG, PEBBLE.GET_MAG_X)
-    UARTS.PUTC(DEBUG, TAB)
-    UARTS.DEC(DEBUG, PEBBLE.GET_MAG_Y)
-    UARTS.PUTC(DEBUG, TAB)
-    UARTS.DEC(DEBUG, PEBBLE.GET_MAG_Z)
-    UARTS.PUTC(DEBUG, TAB)
-    UARTS.DEC(DEBUG, PEBBLE.READ_MAG_TEMP)
-}
 ' setup counter A in this cog to track times when the "button" is "pressed"
 ' this is used to put the system back to sleep
   CTRA := %10101 << 26 + REED_SWITCH    ' counter A in LOGIC !A mode
@@ -357,20 +293,45 @@ PUB MAIN | idx, response, measureTime
   uartState := WAITING_FOR_START
 
 
-  UARTS.STR(DEBUG, string(13, "Done. ", 13, "Going to sleep...  Use magnet to wake me up.",13))
+  UARTS.STR(DEBUG, string(13, "$PSMSG. Sleeping system.  Use magnet to wake."))
   PEBBLE.WRITE_TO_OLED(0, 1, @sleepMsg)
   PEBBLE.WRITE_TO_OLED(0, 2, @magnetMsg)
   PAUSE_MS(3000)
   
 
   repeat
+    if PHSA > CONSTANT(100_000_000*10)  ' has button been pressed for more than 10 seconds?
+      UARTS.STR(DEBUG, string(13, "$PSMSG, Rebooting system"))
+      PEBBLE.WRITE_TO_OLED(0, 1, string("REBOOTING"))
+      PEBBLE.WRITE_TO_OLED(0, 1, string("SYSTEM"))
+      PAUSE_MS(2_000)
+      REBOOT
+      
+    if (PHSA > BUTTON_HOLD_TIME) AND INA[REED_SWITCH]==NOT_PRESSED
+      mainState := SHUTDOWN
+      PHSA := 0
+                              
     case mainState
       SLEEP             :
         PAUSE_MS(200)
         PEBBLE.SLEEP(cogId)
         mainState := WAIT_FOR_WAKE_UP
                                
-      WAIT_FOR_WAKE_UP  :
+      WAIT_FOR_WAKE_UP :
+        if PEBBLE.SWITCHED_ON
+          PEBBLE.WAKE_UP
+          LAUNCH_SERIAL_COG                     ' handle the 2 serial ports- debug, and GPS
+          PAUSE_MS(200)
+          UARTS.STR(DEBUG, string(13, "$PSMSG, System booted and ready for action."))
+          PEBBLE.WRITE_TO_OLED(0, 1, @bootMsg)
+          START_ACQUISITION
+          mainState := ACQUISITION_MODE
+          PHSA      := 0
+        else
+          mainState := WAIT_FOR_WAKE_UP
+          PAUSE_MS(10)
+
+{      WAIT_FOR_WAKE_UP  :
         PEBBLE.WAIT_FOR_WAKE_UP               ' this calls forces system to block until button pressed
         LAUNCH_SERIAL_COG                     ' handle the 2 serial ports- debug, and GPS
         PAUSE_MS(200)
@@ -379,20 +340,14 @@ PUB MAIN | idx, response, measureTime
         START_ACQUISITION
         mainState := ACQUISITION_MODE
         PHSA      := 0
+}
 
       ACQUISITION_MODE  :
         DO_SOMETHING_USEFUL
-        'if (PHSA > BUTTON_PRESS_TIME) AND INA[REED_SWITCH]==NOT_PRESSED
-        '  PEBBLE.OLED_ON
-        '  PHSA := 0                                      ' make sure this is cleared out
 
-        if (PHSA > BUTTON_HOLD_TIME) AND INA[REED_SWITCH]==NOT_PRESSED
-          mainState := SHUTDOWN
-          PHSA := 0
-                              
       SHUTDOWN          :
         PEBBLE.  WRITE_TO_OLED(0, 1, string("SHUTTING DOWN   "))
-        UARTS.STR(DEBUG, string(13, "Shutting down...."))
+        UARTS.STR(DEBUG, string(13, "$PSMSG, Shutting down...."))
         PAUSE_MS(1000)
         mainState := SLEEP
 
@@ -401,22 +356,11 @@ PUB START_ACQUISITION
 ' everything that needs to be done only once/start should go here.
 ' all of this happens in the top-level cog
 
-  UARTS.STR(DEBUG, string(13, "Powering Analog Section."))  
+  UARTS.STR(DEBUG, string(13, "$PSMSG, Powering Analog Section."))  
   PEBBLE.ANALOG_ON
-  UARTS.STR(DEBUG, string(13, "Powering GumStix."))
+  UARTS.STR(DEBUG, string(13, "$PSMSG, Powering GumStix."))
   PEBBLE.GUMSTIX_ON
-  UARTS.STR(DEBUG, string(13, "Powering GPS."))
-  PEBBLE.GPS_ON
-
-  ubxBufferAddress := UBX.INIT(DEBUG, GPS_PORT)          
-
-  ' we need some amount of delay between turning on the gps and speaking to it.  
-  PAUSE_MS(100)
-  UBX.VERSION_POLL
-  UBX.TURN_OFF_NMEA
-  UBX.TURN_ON_RAW
-  UBX.TURN_ON_PPS
-
+  TURN_ON_GPS
   fifoSem   := locknew  'semaphore that guards the blocksInFIFO HUB location which is shared by 2 PASM cogs
   gpsSem    := locknew
   
@@ -429,104 +373,33 @@ PUB START_ACQUISITION
 
   GET_PARAMETERS_FROM_EEPROM
   
-  UARTS.STR(DEBUG, string(13, "Sample Rate: "))
-  UARTS.DEC(DEBUG, sampleRate)
-  UARTS.STR(DEBUG, string(13, "Gain A: "))
-  UARTS.DEC(DEBUG, gainA)
-  UARTS.STR(DEBUG, string(13, "Gain B: "))
-  UARTS.DEC(DEBUG, gainB)
-  UARTS.STR(DEBUG, string(13, "Gain C: "))
-  UARTS.DEC(DEBUG, gainC)
-  UARTS.STR(DEBUG, string(13, "Gain D: "))
-  UARTS.DEC(DEBUG, gainD)
-
-  UARTS.STR(DEBUG, string(13, "Source A: "))
-  if sourceA == INTERNAL
-    UARTS.STR(DEBUG, string(" INTERNAL"))
-  if sourceA == EXTERNAL
-    UARTS.STR(DEBUG, string(" EXTERNAL"))
-
-  UARTS.STR(DEBUG, string(13, "Source B: "))
-  if sourceB == INTERNAL
-    UARTS.STR(DEBUG, string(" INTERNAL"))
-  if sourceB == EXTERNAL
-    UARTS.STR(DEBUG, string(" EXTERNAL"))
-
-  UARTS.STR(DEBUG, string(13, "Source C: "))
-  if sourceC == INTERNAL
-    UARTS.STR(DEBUG, string(" INTERNAL"))
-  if sourceC == EXTERNAL
-    UARTS.STR(DEBUG, string(" EXTERNAL"))
-
-  UARTS.STR(DEBUG, string(13, "Source D: "))
-  if sourceD == INTERNAL
-    UARTS.STR(DEBUG, string(" INTERNAL"))
-  if sourceD == EXTERNAL
-    UARTS.STR(DEBUG, string(" EXTERNAL"))
-
-  PAUSE_MS(300)
+  PRINT_SYSTEM_PARAMETERS
   
-  UARTS.STR(DEBUG, string(13,"FIFO: "))
-  UARTS.DEC(DEBUG, blocksInFIFO)
-
   slaveCogId := cognew(@GUMSTIX_SLAVE, @fifoSem)        ' Start the SPI slave cog first and move stuff from HUB to Gumstix
-  UARTS.STR(DEBUG, string(13, "GUMSITX_SLAVE: "))
+  UARTS.STR(DEBUG, string(13, "$PSMSG, GUMSITX_SLAVE: "))
   UARTS.DEC(DEBUG, slaveCogId)
 
   PAUSE_MS(1000)
   adcCogId := SETUP_AND_LAUNCH_ADC(sampleRate, gainA, gainB, gainC, gainD, sourceA, sourceB, sourceC, sourceD)
-  UARTS.STR(DEBUG, string(13, "ADC_COG_ID: "))
+  UARTS.STR(DEBUG, string(13, "$PSMSG, ADC_COG_ID: "))
   UARTS.DEC(DEBUG, adcCogId)
-                                ' sps, gain, int/ext
-'  junk := cognew(@SPI_MASTER, 0)        ' SPI MASTER code used for testing only; be sure to start the SPI slave cog first
-'  UARTS.STR(DEBUG, string(13, "SPI_MASTER: "))
-'  UARTS.DEC(DEBUG, junk)
+
+  'UARTS.STR(DEBUG, string(13, "SPI_MASTER: "))
+  'UARTS.DEC(DEBUG, cognew(@SPI_MASTER, 0))' SPI MASTER code used for testing only; be sure to start the SPI slave cog first
+  
 
 
   CTRB[30..26] := %01000                                'ctrb module to POS detector;                                                        
   CTRB[5..0]   := GPS_PPS                               'add frqb to phsb every clock cycle that GPS_PPS high
   FRQB:= 1                                              'this will keep track of the number of system counts
   PHSB~                                                 'from the rising edge of GPS
-                                                     
-PUB GET_PARAMETERS_FROM_EEPROM
-  sampleRate :=  PEBBLE.READ_EEPROM_LONG(SPS_ADDRESS) 
-  gainA      :=  PEBBLE.READ_EEPROM_LONG(GAIN_A_ADDRESS)
-  gainB      :=  PEBBLE.READ_EEPROM_LONG(GAIN_B_ADDRESS)
-  gainC      :=  PEBBLE.READ_EEPROM_LONG(GAIN_C_ADDRESS)
-  gainD      :=  PEBBLE.READ_EEPROM_LONG(GAIN_D_ADDRESS)
-  sourceA    :=  PEBBLE.READ_EEPROM_LONG(SOURCE_A_ADDRESS)
-  sourceB    :=  PEBBLE.READ_EEPROM_LONG(SOURCE_B_ADDRESS)
-  sourceC    :=  PEBBLE.READ_EEPROM_LONG(SOURCE_C_ADDRESS)
-  sourceD    :=  PEBBLE.READ_EEPROM_LONG(SOURCE_D_ADDRESS)
 
-PUB STORE_PARAMETERS_TO_EEPROM
-  PEBBLE.WRITE_EEPROM_LONG(SPS_ADDRESS, sampleRate)
-  PEBBLE.WRITE_EEPROM_LONG(GAIN_A_ADDRESS, gainA)
-  PEBBLE.WRITE_EEPROM_LONG(GAIN_B_ADDRESS, gainB)
-  PEBBLE.WRITE_EEPROM_LONG(GAIN_C_ADDRESS, gainC)
-  PEBBLE.WRITE_EEPROM_LONG(GAIN_D_ADDRESS, gainD)
-  PEBBLE.WRITE_EEPROM_LONG(SOURCE_A_ADDRESS, sourceA)
-  PEBBLE.WRITE_EEPROM_LONG(SOURCE_B_ADDRESS, sourceB)
-  PEBBLE.WRITE_EEPROM_LONG(SOURCE_C_ADDRESS, sourceC)
-  PEBBLE.WRITE_EEPROM_LONG(SOURCE_D_ADDRESS, sourceD)
-  
-PUB STORE_DEFAULT_PARAMS_TO_EEPROM
-  PEBBLE.WRITE_EEPROM_LONG(SPS_ADDRESS, 1000)
-  PEBBLE.WRITE_EEPROM_LONG(GAIN_A_ADDRESS, 1)
-  PEBBLE.WRITE_EEPROM_LONG(GAIN_B_ADDRESS, 1)
-  PEBBLE.WRITE_EEPROM_LONG(GAIN_C_ADDRESS, 1)
-  PEBBLE.WRITE_EEPROM_LONG(GAIN_D_ADDRESS, 10)
-  PEBBLE.WRITE_EEPROM_LONG(SOURCE_A_ADDRESS, INTERNAL)
-  PEBBLE.WRITE_EEPROM_LONG(SOURCE_B_ADDRESS, INTERNAL)
-  PEBBLE.WRITE_EEPROM_LONG(SOURCE_C_ADDRESS, INTERNAL)
-  PEBBLE.WRITE_EEPROM_LONG(SOURCE_D_ADDRESS, INTERNAL)
+PUB GET_AND_PRINT_PARAMETERS
+  ' check to see if factury defaults have already been stored
+  CHECK_DEFAULT_PARAMS
+  GET_PARAMETERS_FROM_EEPROM
+  PRINT_SYSTEM_PARAMETERS                                                     
 
-  UARTS.STR(DEBUG, string(13,"Default paramaters stored to EEPROM.  Reboot system."))
-  PEBBLE.WRITE_TO_OLED(0, 1, string("WROTE EEPROM    "))
-
-  repeat
-    waitcnt(0)
- 
 PUB DO_SOMETHING_USEFUL | rxByte, response, idx
 ' put things here that need to be done but have some timing flexibility
 ' all of this happens in the top level cog
@@ -573,7 +446,7 @@ PUB DO_SOMETHING_USEFUL | rxByte, response, idx
   until response == -1 OR response == UBX#RXMRAW
   
   if response == UBX#RXMRAW                             ' have we collected all the data in this second?
-    UARTS.STR(DEBUG, string(13,"FIFO: "))
+    UARTS.STR(DEBUG, string(13,"$PSMSG, FIFO: "))
      UARTS.DEC(DEBUG, blocksInFIFO)                    ' if the gps buffer is empty put something into it
     if gpsDataToWrite == MY_FALSE                      ' have the data we put there previously been written?
       longmove(@gpsBuffer, ubxBufferAddress, 256)      ' copy that info into this cog
@@ -592,13 +465,15 @@ PUB DO_SOMETHING_USEFUL | rxByte, response, idx
 PUB UPDATE_TIME_AND_DATE | isLeapYear
 '' update the local copy of year, month, day, hour, minute, second
 
-  year   :=  UBX.YEAR
-  month  :=  UBX.MONTH
-  day    :=  UBX.DAY
-  hour   :=  UBX.HOUR
-  minute :=  UBX.MINUTE
-  second :=  UBX.SECOND
+  year     :=  UBX.YEAR
+  month    :=  UBX.MONTH
+  day      :=  UBX.DAY
+  hour     :=  UBX.HOUR
+  minute   :=  UBX.MINUTE
+  second   :=  UBX.SECOND
   utcValid := UBX.UTC_TIME_VALID
+  gpsFix   := UBX.GET_STATUS_FIX
+  accuracy := UBX.ACCURACY_NS
 
   isLeapYear := 1 + ((year//4 == 0 AND year//100 <> 0 OR year//400 == 0)) ' check to see if this is a leap year
   ' leap = 0 means leap year; leap = 1 means not a leap year
@@ -638,7 +513,50 @@ PUB UPDATE_TIME_AND_DATE | isLeapYear
   lockclr(gpsSem)
   
 PUB PRINT_TIME_AND_DATE
-  uarts.str(debug, string("$PSSTAT,"))
+
+'  uarts.str(debug, string(13,"DATE:"))
+  oLedBuf[0] := " "
+  oLedBuf[1] := " "
+  oLedBuf[2] := " "
+  oLedBuf[3] := year  / 1000 + "0"
+  oLedBuf[4] := year  / 100 // 10 + "0"
+  oLedBuf[5] := year  / 10 // 10+ "0"
+  oLedBuf[6] := year // 10 + "0"
+  oLedBuf[7] := "-"
+  oLedBuf[8] := month  / 10 + "0"
+  oLedBuf[9] := month // 10+ "0"
+  oLedBuf[10] := "-"
+  oLedBuf[11] := day  / 10 + "0"
+  oLedBuf[12] := day // 10+ "0"
+  oLedBuf[13] := " "
+  oLedBuf[14] := " "
+  oLedBuf[15] := " "
+  oLedBuf[16] := 0              ' zero terminate the buffer
+'  uarts.str(debug, @oLedBuf)  
+'  PEBBLE.WRITE_TO_OLED(0, 1, @oLedBuf)
+
+'  uarts.str(debug, string(13,"TIME:"))
+  oLedBuf[0] := " "
+  oLedBuf[1] := " "
+  oLedBuf[2] := " "
+  oLedBuf[3] := " "
+  oLedBuf[4] := hour / 10 + "0"
+  oLedBuf[5] := hour // 10 + "0"
+  oLedBuf[6] := ":"
+  oLedBuf[7] := minute / 10 + "0"
+  oLedBuf[8] := minute // 10 + "0"
+  oLedBuf[9] := ":"
+  oLedBuf[10] := second / 10 + "0"
+  oLedBuf[11] := second // 10 + "0"
+  oLedBuf[12] := " "
+  oLedBuf[13] := " "
+  oLedBuf[14] := " "
+  oLedBuf[15] := " "
+  oLedBuf[16] := 0
+'  uarts.str(debug, @oLedBuf)  
+'  PEBBLE.WRITE_TO_OLED(0, 2, @oLedBuf)
+
+  uarts.str(debug, string(13, "$PSSTAT,"))
   uarts.dec(debug, year)
   uarts.putc(debug, "-")
   uarts.dec(debug, month)
@@ -653,8 +571,14 @@ PUB PRINT_TIME_AND_DATE
   uarts.putc(debug, ",")
   uarts.dec(debug, cntsAtPPS1)
   uarts.putc(debug, ",")
-  if utcValid
-    uarts.STR(DEBUG, string("VALID"))
+  uarts.dec(debug, accuracy)
+  uarts.putc(debug, ",")
+  uarts.bin(debug, utcValid, 3)
+  uarts.putc(debug, ",")
+  uarts.bin(debug, gpsFix, 6)
+  uarts.putc(debug, ",")
+  if ((gpsFix & %0011_1111) > 1)
+    uarts.STR(DEBUG, string("GPSFIX"))
   else
     uarts.STR(DEBUG, string("INVALID"))
   uarts.putc(debug, ",")
@@ -663,7 +587,14 @@ PUB PRINT_TIME_AND_DATE
   uarts.dec(debug, UBX.get_latitude)
   uarts.putc(debug, ",")
   uarts.dec(debug, UBX.get_elevation)
-  uarts.putc(debug, 13)
+
+  if clockSetYet == FALSE AND ((gpsFix & %0011_1111) > 1) 
+    uarts.STR(DEBUG, string(13,"Setting RTC: "))
+    PEBBLE.SET_RTC_TIME(year, month, day, hour, minute, second, 0)
+    READ_RTC_TIME
+    PRINT_RTC_TIME
+    clockSetYet := TRUE
+
 
 '  if second == 4
   PEBBLE.WRITE_TO_OLED(0, 1, @bootMsg)
@@ -730,52 +661,60 @@ PUB SETUP_AND_LAUNCH_ADC(_sps, gA, gB, gC, gD, aMux, bMux, cMux, dMux) | sampleR
 
 PUB PROCESS_UART | idx
 ' put the code necessary to process incoming UART commands here
-'  KILL              = "K"
-'  SAMPLE_RATE       = "S"
-'  GAIN              = "G"
-'  REBOOT_GUMSTIX    = "R"
-'  SOURCE            = "O"
-'  SHUTDOWN_SYSTEM   = "D"
-'  WRITE_T_OLED      = "W"?
+{
+    KILL                  = "K"
+    SHUTDOWN_SYSTEM       = "D"
+    SOFT_REBOOT_GUMSTIX   = "S"
+    HARD_REBOOT_GUMSTIX   = "H"
+    PUT_SYSTEM_TO_SLEEP   = "L"
+    RATE                  = "R"
+    QUERY                 = "Q"
+    GAIN                  = "G"
+    SOURCE                = "O"
+    WRITE_TO_OLED         = "W"
+}
   
-  UARTS.STR(DEBUG, string(13,"Received command: "))
-  UARTS.PUTC(DEBUG, inUartBuf[0])
+'  UARTS.STR(DEBUG, string(13,"Received command: "))
+'  UARTS.PUTC(DEBUG, inUartBuf[0])
 
   
-  UARTS.STR(DEBUG, string(13,"inUartBuf: "))
-  repeat idx from 0 to 20
-    UARTS.HEX(DEBUG, inUartBuf[idx],2)
-    UARTS.PUTC(DEBUG, SPACE)
+'  UARTS.STR(DEBUG, string(13,"inUartBuf: "))
+'  repeat idx from 0 to 20
+'    UARTS.HEX(DEBUG, inUartBuf[idx],2)
+'    UARTS.PUTC(DEBUG, SPACE)
     
-  UARTS.STR(DEBUG, string(13,"inUartPtr: "))
-  repeat idx from 0 to 5
-    UARTS.HEX(DEBUG, inUartPtr[idx], 2)
-    UARTS.PUTC(DEBUG, SPACE)
+'  UARTS.STR(DEBUG, string(13,"inUartPtr: "))
+'  repeat idx from 0 to 5
+'    UARTS.HEX(DEBUG, inUartPtr[idx], 2)
+'    UARTS.PUTC(DEBUG, SPACE)
 
-  UARTS.PUTC(DEBUG, CR)
+'  UARTS.PUTC(DEBUG, CR)
   
   case inUartBuf[0]
-    WRITE_TO_OLED:
-      UARTS.STR(DEBUG, string(" Writing to OLED:"))
-      UARTS.STR(DEBUG, @inUartBuf[inUartPtr[1]])
-      PEBBLE.WRITE_TO_OLED(0,2,@inUartBuf[inUartPtr[1]])
-      
-    KILL :
-      UARTS.STR(DEBUG, string(" Killing gumstix."))
+    KILL :                 'K
+      UARTS.STR(DEBUG, string(13,"$PSCMD, KILL"))
       PEBBLE.GUMSTIX_OFF
 
-    SHUTDOWN_SYSTEM :
-      UARTS.STR(DEBUG, string(" Shutting down system."))
-      PAUSE_MS(4000)
+    SHUTDOWN_SYSTEM :      'D
+      UARTS.STR(DEBUG, string(13,"$PSCMD, SHUTDOWN"))
+      PAUSE_MS(12_000)
       mainState := SHUTDOWN
 
-    REBOOT_GUMSTIX :
-      UARTS.STR(DEBUG, string(" Rebooting gumstix."))
+    SOFT_REBOOT_GUMSTIX :  'S
+      UARTS.STR(DEBUG, string(13,"$PSCMD, REBOOT"))
+      PAUSE_MS(2000)
+
+    HARD_REBOOT_GUMSTIX :  'H
       PEBBLE.GUMSTIX_OFF
-      PAUSE_MS(4000)
+      PAUSE_MS(500)
       PEBBLE.GUMSTIX_ON
 
-    SAMPLE_RATE :
+    PUT_SYSTEM_TO_SLEEP :  'L
+      PEBBLE.GUMSTIX_OFF
+      PAUSE_MS(500)
+      PEBBLE.GUMSTIX_ON
+
+    RATE :                 'R
       UARTS.STR(DEBUG, string(" Changing sample rate to: "))
       sampleRate := NUM.FROMSTR(@inUartBuf[inUartPtr[1]],NUM#DDEC) 
       UARTS.DEC(DEBUG, sampleRate)
@@ -787,8 +726,11 @@ PUB PROCESS_UART | idx
       cogStop(slaveCogId)
       STORE_PARAMETERS_TO_EEPROM
       START_ACQUISITION
+
+    QUERY :                ' Q
+      PRINT_SYSTEM_PARAMETERS
       
-    GAIN :
+    GAIN :                 'G
       UARTS.STR(DEBUG, string(" Changing gain to: "))
       gainA := NUM.FROMSTR(@inUartBuf[inUartPtr[1]],NUM#DDEC) 
       gainB := NUM.FROMSTR(@inUartBuf[inUartPtr[2]],NUM#DDEC) 
@@ -810,7 +752,7 @@ PUB PROCESS_UART | idx
       STORE_PARAMETERS_TO_EEPROM
       START_ACQUISITION
       
-    SOURCE :
+    SOURCE :               'O
       UARTS.STR(DEBUG, string(" Changing input source to: "))
       sourceA := NUM.FROMSTR(@inUartBuf[inUartPtr[1]],NUM#DDEC) 
       sourceB := NUM.FROMSTR(@inUartBuf[inUartPtr[2]],NUM#DDEC) 
@@ -831,9 +773,133 @@ PUB PROCESS_UART | idx
       cogStop(slaveCogId)
       STORE_PARAMETERS_TO_EEPROM
       START_ACQUISITION
-      
+
+    WRITE_TO_OLED :        'W
+      UARTS.STR(DEBUG, string(" Write to OLED: "))
+      UARTS.STR(DEBUG, @inUartBuf[2])
+      UARTS.PUTC(DEBUG, CR)
+      PEBBLE.WRITE_TO_OLED(0, 2, @inUartBuf[2])
+       
     OTHER: 
       UARTS.STR(DEBUG, string(" Unrecognized command."))
+
+PUB PRINT_EUI
+  bytefill(@euiAddr, 0, 8)
+  euiAddr := PEBBLE.READ_EUI + 3' skip the first 3 bytes
+  euiMsg[0] := PEBBLE.TO_HEX((BYTE[euiAddr] >> 4 & $F))
+  euiMsg[1] := PEBBLE.TO_HEX((BYTE[euiAddr++] & $F))
+  euiMsg[2] := ":"
+  euiMsg[3] := PEBBLE.TO_HEX((BYTE[euiAddr] >> 4 & $F))
+  euiMsg[4] := PEBBLE.TO_HEX((BYTE[euiAddr++] & $F))
+  euiMsg[5] := ":"
+  euiMsg[6] := PEBBLE.TO_HEX((BYTE[euiAddr] >> 4 & $F))
+  euiMsg[7] := PEBBLE.TO_HEX((BYTE[euiAddr++] & $F))
+  
+  
+  PEBBLE.WRITE_TO_OLED(0,1,@euiMsg)
+  UARTS.STR(DEBUG, @euiMsg)
+
+PUB READ_RTC_TIME
+  rtcAddr:= PEBBLE.READ_RTC_TIME
+
+PUB PRINT_RTC_TIME
+  UARTS.STR(DEBUG, string(13,"$PSMSG, RTC Date and time: "))
+  UARTS.DEC(DEBUG, BYTE[rtcAddr][6]+2000)
+  UARTS.PUTC(DEBUG, SPACE)
+  UARTS.DEC(DEBUG, BYTE[rtcAddr][5])
+  UARTS.PUTC(DEBUG, SPACE)
+  UARTS.DEC(DEBUG, BYTE[rtcAddr][4])
+  UARTS.PUTC(DEBUG, SPACE)
+  UARTS.DEC(DEBUG, BYTE[rtcAddr][3])
+  UARTS.PUTC(DEBUG, SPACE)
+  UARTS.DEC(DEBUG, BYTE[rtcAddr][2])
+  UARTS.PUTC(DEBUG, SPACE)
+  UARTS.DEC(DEBUG, BYTE[rtcAddr][1])
+  UARTS.PUTC(DEBUG, SPACE)
+  UARTS.DEC(DEBUG, BYTE[rtcAddr][0])
+  UARTS.PUTC(DEBUG, SPACE)
+
+PUB GET_PARAMETERS_FROM_EEPROM
+  sampleRate :=  PEBBLE.READ_EEPROM_LONG(SPS_ADDRESS) 
+  gainA      :=  PEBBLE.READ_EEPROM_LONG(GAIN_A_ADDRESS)
+  gainB      :=  PEBBLE.READ_EEPROM_LONG(GAIN_B_ADDRESS)
+  gainC      :=  PEBBLE.READ_EEPROM_LONG(GAIN_C_ADDRESS)
+  gainD      :=  PEBBLE.READ_EEPROM_LONG(GAIN_D_ADDRESS)
+  sourceA    :=  PEBBLE.READ_EEPROM_LONG(SOURCE_A_ADDRESS)
+  sourceB    :=  PEBBLE.READ_EEPROM_LONG(SOURCE_B_ADDRESS)
+  sourceC    :=  PEBBLE.READ_EEPROM_LONG(SOURCE_C_ADDRESS)
+  sourceD    :=  PEBBLE.READ_EEPROM_LONG(SOURCE_D_ADDRESS)
+
+PUB STORE_PARAMETERS_TO_EEPROM
+  PEBBLE.WRITE_EEPROM_LONG(SPS_ADDRESS, sampleRate)
+  PEBBLE.WRITE_EEPROM_LONG(GAIN_A_ADDRESS, gainA)
+  PEBBLE.WRITE_EEPROM_LONG(GAIN_B_ADDRESS, gainB)
+  PEBBLE.WRITE_EEPROM_LONG(GAIN_C_ADDRESS, gainC)
+  PEBBLE.WRITE_EEPROM_LONG(GAIN_D_ADDRESS, gainD)
+  PEBBLE.WRITE_EEPROM_LONG(SOURCE_A_ADDRESS, sourceA)
+  PEBBLE.WRITE_EEPROM_LONG(SOURCE_B_ADDRESS, sourceB)
+  PEBBLE.WRITE_EEPROM_LONG(SOURCE_C_ADDRESS, sourceC)
+  PEBBLE.WRITE_EEPROM_LONG(SOURCE_D_ADDRESS, sourceD)
+  
+PUB CHECK_DEFAULT_PARAMS | eepromValue
+
+  eepromValue := PEBBLE.READ_EEPROM_LONG(GPB_ADDRESS)
+  if eepromValue == $DEAD_BEEF
+    UARTS.STR(DEBUG, string(13,"$PSMSG, Factory parameters already set."))
+  else
+    WRITE_DEFAULT_PARAMS_TO_EEPROM
+
+PUB WRITE_DEFAULT_PARAMS_TO_EEPROM
+  sampleRate := 1000
+  gainA      :=    1
+  gainB      :=    1
+  gainC      :=    1
+  gainD      :=   10
+  sourceA    := INTERNAL
+  sourceB    := INTERNAL
+  sourceC    := INTERNAL
+  sourceD    := INTERNAL
+  STORE_PARAMETERS_TO_EEPROM
+  PEBBLE.WRITE_EEPROM_LONG(GPB_ADDRESS, $DEAD_BEEF)
+  UARTS.STR(DEBUG, string(13,"$PSMSG, Default paramaters stored to EEPROM."))
+  PEBBLE.WRITE_TO_OLED(0, 1, string("WROTE TO EEPROM "))
+  PAUSE_MS(1500)
+
+PUB PRINT_SYSTEM_PARAMETERS
+  
+  UARTS.STR(DEBUG, string(13, "$PSPARMS: "))
+  UARTS.DEC(DEBUG, sampleRate)
+  UARTS.PUTC(DEBUG, COMMA)
+  UARTS.DEC(DEBUG, gainA)
+  UARTS.PUTC(DEBUG, COMMA)
+  UARTS.DEC(DEBUG, gainB)
+  UARTS.PUTC(DEBUG, COMMA)
+  UARTS.DEC(DEBUG, gainC)
+  UARTS.PUTC(DEBUG, COMMA)
+  UARTS.DEC(DEBUG, gainD)
+  UARTS.PUTC(DEBUG, COMMA)
+  if sourceA == INTERNAL
+    UARTS.STR(DEBUG, string(" INTERNAL"))
+  if sourceA == EXTERNAL
+    UARTS.STR(DEBUG, string(" EXTERNAL"))
+  UARTS.PUTC(DEBUG, COMMA)
+  if sourceB == INTERNAL
+    UARTS.STR(DEBUG, string(" INTERNAL"))
+  if sourceB == EXTERNAL
+    UARTS.STR(DEBUG, string(" EXTERNAL"))
+  UARTS.PUTC(DEBUG, COMMA)
+  if sourceC == INTERNAL
+    UARTS.STR(DEBUG, string(" INTERNAL"))
+  if sourceC == EXTERNAL
+    UARTS.STR(DEBUG, string(" EXTERNAL"))
+  UARTS.PUTC(DEBUG, COMMA)
+  if sourceD == INTERNAL
+    UARTS.STR(DEBUG, string(" INTERNAL"))
+  if sourceD == EXTERNAL
+    UARTS.STR(DEBUG, string(" EXTERNAL"))
+
+  UARTS.PUTC(DEBUG, CR)
+
      
 PUB STOP_ADC_COG
 '' method that kills off the ADC cog
@@ -849,7 +915,109 @@ PUB LAUNCH_SERIAL_COG
   UARTS.ADDPORT(GPS_PORT, GPS_RX_FROM,   GPS_TX_TO,   -1, -1, 0, %000000, GPS_BAUD)      'Add condor NMEA port
   UARTS.START
   serialCogId    := UARTS.GETCOGID                                               'Start the ports
+  PAUSE_MS(200)
 
+PUB TURN_ON_GPS
+  UARTS.STR(DEBUG, string(13, "$PSMSG, GPS ON."))
+  PEBBLE.GPS_ON
+  ubxBufferAddress := UBX.INIT(DEBUG, GPS_PORT)          
+
+  ' we need some amount of delay between turning on the gps and speaking to it.  
+  PAUSE_MS(100)
+  UBX.VERSION_POLL
+  UBX.TURN_OFF_NMEA
+  UBX.TURN_ON_RAW
+  UBX.TURN_ON_PPS
+
+
+PUB TEST_MAG_ACC | idx, measureTime
+  PEBBLE.MAG_ACC_ON
+  PEBBLE.LSM_INIT
+  
+  idx := 0
+  measureTime := cnt + clkfreq
+  repeat
+    UARTS.PUTC(DEBUG, 13)
+    waitcnt(measureTime +=  CONSTANT(100_000_000/25))
+    'if idx // 20 == 0
+    '  UARTS.STR(DEBUG, string(13, "ACCx",9,"ACCy",9,"ACCz",9,"MAGx",9,"MAGy",9,"MAGz",9,"TEMP",13))
+    'idx++
+    UARTS.DEC(DEBUG, PEBBLE.GET_ACC_X)
+    UARTS.PUTC(DEBUG, TAB)
+'    PAUSE_MS(1)
+    UARTS.DEC(DEBUG, PEBBLE.GET_ACC_Y)
+    UARTS.PUTC(DEBUG, TAB)
+'    PAUSE_MS(1)
+    UARTS.DEC(DEBUG, PEBBLE.GET_ACC_Z)
+    UARTS.PUTC(DEBUG, TAB)
+'    PAUSE_MS(1)
+
+    PEBBLE.READ_MAG             ' we need to read the mag before the others are populated.  
+    UARTS.DEC(DEBUG, PEBBLE.GET_MAG_X)
+    UARTS.PUTC(DEBUG, TAB)
+    UARTS.DEC(DEBUG, PEBBLE.GET_MAG_Y)
+    UARTS.PUTC(DEBUG, TAB)
+    UARTS.DEC(DEBUG, PEBBLE.GET_MAG_Z)
+    UARTS.PUTC(DEBUG, TAB)
+    UARTS.DEC(DEBUG, PEBBLE.READ_MAG_TEMP)
+
+PUB TEST_RTC | setDow, setYear, setMon, setDay, setHour, setMin, setSec
+
+  setDow  :=    4
+  setYear := 2014
+  setMon  :=   11
+  setDay  :=    6
+  setHour :=   21
+  setMin  :=   46
+  setSec  :=   30
+
+  PEBBLE.SET_RTC_TIME(setYear, setMon, setDay, setHour, setMin, setSec, setDow)
+  UARTS.STR(DEBUG, string(13,"Setting RTC time: "))
+  UARTS.DEC(DEBUG, setYear)
+  UARTS.PUTC(DEBUG, "-")
+  UARTS.DEC(DEBUG, setMon)
+  UARTS.PUTC(DEBUG, "-")
+  UARTS.DEC(DEBUG, setDay)
+  UARTS.PUTC(DEBUG, SPACE)
+  UARTS.DEC(DEBUG, setHour)
+  UARTS.PUTC(DEBUG, COLON)
+  UARTS.DEC(DEBUG, setMin)
+  UARTS.PUTC(DEBUG, COLON)
+  UARTS.DEC(DEBUG, setSec)
+  UARTS.PUTC(DEBUG, SPACE)
+  UARTS.DEC(DEBUG, setDow)
+
+  repeat
+    UARTS.STR(DEBUG, string(13, "Going to sleep.",13))
+    PAUSE_MS(500)
+    PEBBLE.SLEEP(mainCogId)
+    PEBBLE.WAIT_FOR_TIME(2)
+    LAUNCH_SERIAL_COG                     ' handle the 2 serial ports- debug, and GPS
+    PAUSE_MS(200)
+    UARTS.STR(DEBUG, string(13, "System booted and ready for action.",13))
+    PEBBLE.WRITE_TO_OLED(0, 1, @bootMsg)
+    repeat 
+      rtcAddr := PEBBLE.READ_RTC_TIME
+      UARTS.STR(DEBUG, string(13,"Date and time: "))
+      UARTS.DEC(DEBUG, BYTE[rtcAddr][6]+2000)
+      UARTS.PUTC(DEBUG, SPACE)
+      UARTS.DEC(DEBUG, BYTE[rtcAddr][5])
+      UARTS.PUTC(DEBUG, SPACE)
+      UARTS.DEC(DEBUG, BYTE[rtcAddr][4])
+      UARTS.PUTC(DEBUG, SPACE)
+      UARTS.DEC(DEBUG, BYTE[rtcAddr][3])
+      UARTS.PUTC(DEBUG, SPACE)
+      UARTS.DEC(DEBUG, BYTE[rtcAddr][2])
+      UARTS.PUTC(DEBUG, SPACE)
+      UARTS.DEC(DEBUG, BYTE[rtcAddr][1])
+      UARTS.PUTC(DEBUG, SPACE)
+      UARTS.DEC(DEBUG, BYTE[rtcAddr][0])
+      UARTS.PUTC(DEBUG, SPACE)
+      PAUSE_MS(500)
+    until BYTE[rtcAddr][0] == 15    
+  
+
+  
 PUB PAUSE_MS(mS)
   waitcnt(clkfreq/1000 * mS + cnt)
 
@@ -902,7 +1070,6 @@ GUMSTIX_SLAVE         org            0
         
           rdlong  soutData,      slavePtr              ' get long from HUB
           'mov     soutData,      sixsix                ' put 0x5858_5858 into outbyte
-'          call    #SWAP_ENDIAN 
           call    #WRITE_LONG
           add     slavePtr,      #4                    ' increment bufferPtr
           
@@ -930,6 +1097,7 @@ WRITE_LONG
           waitpeq ssclkMask,    ssclkMask        ' wait for CLK to go high
           djnz    sBits,        #:wslaveLoop     ' Decrement loop count.
 
+          muxz    outa,         somiMask         ' make sure MISO is low on exit
 
 WRITE_LONG_ret    ret
 
@@ -1059,6 +1227,8 @@ WRITE_GPS_LONG
           waitpeq ssclkMask,    ssclkMask        ' wait for CLK to go high
           djnz    sBits,        #:loop4          ' Decrement loop count.
 
+          muxz    outa,         somiMask         ' make sure MISO is low on exit
+
 WRITE_GPS_LONG_ret  ret
 
 
@@ -1161,27 +1331,23 @@ MAX11040K         org         0
           ' read Z connected to RED/BROWN phone
           call    #READ_SAMPLE  ' sample is now in data 
           'mov     data,         #$A
-          'xor     data,         codeA
-          call    #WRITE_LONG_TO_HUB
+          call    #SWAP_AND_WRITE_LONG_TO_HUB
 
           ' read N/S connected to ORANGE/YELLOW
           call    #READ_SAMPLE  ' sample is now in data
           'mov     data,         #$B
-          'xor     data,         codeB
-          call    #WRITE_LONG_TO_HUB
+          call    #SWAP_AND_WRITE_LONG_TO_HUB
                                 
           ' read E/W connected to BLUE/GREEN
           call    #READ_SAMPLE  ' sample is now in data
           'mov     data,         #$C
-          'xor     data,         codeC
-          call    #WRITE_LONG_TO_HUB
+          call    #SWAP_AND_WRITE_LONG_TO_HUB
 
           ' read D                                      ' we need to read this 4 sample even
           call    #READ_SAMPLE  ' sample is now in data
           'mov     data,         #$D
-          'xor     data,         codeD
           mov     data,         cnt
-          call    #WRITE_LONG_TO_HUB
+          call    #SWAP_AND_WRITE_LONG_TO_HUB
 
           ' raise CS
           call    #RAISE_CS                             ' raise CS line
@@ -1201,26 +1367,26 @@ MAX11040K         org         0
 
           rdlong  data,         atemp        ' get ymd from main cog
           add     atemp,        #4
-          call    #WRITE_LONG_TO_HUB
+          call    #SWAP_AND_WRITE_LONG_TO_HUB
 
           rdlong  data,         atemp        ' get hms from main cog
           add     atemp,        #4
-          call    #WRITE_LONG_TO_HUB
+          call    #SWAP_AND_WRITE_LONG_TO_HUB
 
           rdlong  data,         atemp        ' get cnts@PPS from main cog
           add     atemp,        #4
-          call    #WRITE_LONG_TO_HUB
+          call    #SWAP_AND_WRITE_LONG_TO_HUB
 
           lockclr gpsSem                     ' clear gpsSem for others to use
 
           mov     data,         cntsAtStart
-          call    #WRITE_LONG_TO_HUB
+          call    #SWAP_AND_WRITE_LONG_TO_HUB
 
           mov     data,         cntsAtEnd
-          call    #WRITE_LONG_TO_HUB
+          call    #SWAP_AND_WRITE_LONG_TO_HUB
 
           mov     data,         cksum          
-          call    #WRITE_LONG_TO_HUB
+          call    #SWAP_AND_WRITE_LONG_TO_HUB
 
           
 ' we've filled one block so lets update shared variable blocksInFIFO
@@ -1263,6 +1429,16 @@ hub pointer
 ***************************************************************************************************}
 WRITE_LONG_TO_HUB
                                                 ' soutData = b3 b2 b1 b0
+          wrlong  data,         bufferPtr    ' copy it back to hub in new location
+          add     bufferPtr,    #4
+
+WRITE_LONG_TO_HUB_ret    ret
+{******************************** SWAP_AND_WRITE_LONG_TO_HUB *******************************************************
+function that will swap the endianness of the long and write it to hub then increment the
+hub pointer
+***************************************************************************************************}
+SWAP_AND_WRITE_LONG_TO_HUB
+                                                ' soutData = b3 b2 b1 b0
           mov     swapTemp,     endianMask      '       t1 = 00 FF 00 FF
           ror     data,         #8              ' soutData = b0 b3 b2 b1
           and     swapTemp,     data        '       t1 = 00 b3 00 b1
@@ -1273,7 +1449,7 @@ WRITE_LONG_TO_HUB
           wrlong  data,         bufferPtr    ' copy it back to hub in new location
           add     bufferPtr,    #4
 
-WRITE_LONG_TO_HUB_ret    ret
+SWAP_AND_WRITE_LONG_TO_HUB_ret    ret
 {******************************** SETUP_PINS *******************************************************
 Short function to setup the SPI and test pins.  Only used once and it's really
 for cleaning up the code more than anything.

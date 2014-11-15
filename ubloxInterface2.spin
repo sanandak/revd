@@ -109,10 +109,11 @@ VAR
   ' posllh
   long longitude, latitude, height ' degrees scaled by 1e-7 and mm
   ' status
-  byte gpsfix                      ' 0 = no fix, 2 = 2d, 3 = 3d
+  byte statusFix                      ' 0 = no fix, 2 = 2d, 3 = 3d
   ' timegps
   byte leapS
-  byte valid
+  byte gpsValid
+  long accuracy
   ' timeutc
   word utcyear
   byte utcmonth, utcday, utchour, utcmin, utcsec, utcValid
@@ -185,7 +186,7 @@ PUB HWADDR
   return @hwVersion
 
 PUB TURN_OFF_NMEA | _pkt, nTry, idx
-  uarts.str(debug, string(13, "Turning OFF NMEA messages.",13))
+  UARTS.STR(DEBUG, string(13, "$PSMSG, GPS NMEA OFF"))
   ' turn off gll
   CFG_MSG_NMEA[6] := $F0
   CFG_MSG_NMEA[7] := $01
@@ -200,11 +201,11 @@ PUB TURN_OFF_NMEA | _pkt, nTry, idx
     TXMSG(@CFG_MSG_NMEA, 16)
     _pkt := GETACK
   until _pkt == ACKACK OR (nTry++ == 5)
-  uarts.str(debug, string(13, "After Turn off GLL nTry, ack/nak = "))
-  uarts.dec(debug, nTry)
-  uarts.putc(debug, " ")
-  uarts.dec(debug, _pkt)
-  uarts.putc(debug, 13)
+'  uarts.str(debug, string(13, "After Turn off GLL nTry, ack/nak = "))
+'  uarts.dec(debug, nTry)
+'  uarts.putc(debug, " ")
+'  uarts.dec(debug, _pkt)
+'  uarts.putc(debug, 13)
 
   CFG_MSG_NMEA[6] := $F0
   CFG_MSG_NMEA[7] := $00
@@ -219,11 +220,11 @@ PUB TURN_OFF_NMEA | _pkt, nTry, idx
     TXMSG(@CFG_MSG_NMEA, 16)
     _pkt := GETACK
   until _pkt == ACKACK OR (nTry++ == 5)
-  uarts.str(debug, string(13, "After Turn off GGA nTry, ack/nak = "))
-  uarts.dec(debug, nTry)
-  uarts.putc(debug, " ")
-  uarts.dec(debug, _pkt)
-  uarts.putc(debug, 13)
+'  uarts.str(debug, string(13, "After Turn off GGA nTry, ack/nak = "))
+'  uarts.dec(debug, nTry)
+'  uarts.putc(debug, " ")
+'  uarts.dec(debug, _pkt)
+'  uarts.putc(debug, 13)
 
   CFG_MSG_NMEA[6] := $F0
   CFG_MSG_NMEA[7] := $02
@@ -238,11 +239,11 @@ PUB TURN_OFF_NMEA | _pkt, nTry, idx
     TXMSG(@CFG_MSG_NMEA, 16)
     _pkt := GETACK
   until _pkt == ACKACK OR (nTry++ == 5)
-  uarts.str(debug, string(13, "After Turn off GSA nTry, ack/nak = "))
-  uarts.dec(debug, nTry)
-  uarts.putc(debug, " ")
-  uarts.dec(debug, _pkt)
-  uarts.putc(debug, 13)
+'  uarts.str(debug, string(13, "After Turn off GSA nTry, ack/nak = "))
+'  uarts.dec(debug, nTry)
+'  uarts.putc(debug, " ")
+'  uarts.dec(debug, _pkt)
+'  uarts.putc(debug, 13)
 
   CFG_MSG_NMEA[6] := $F0
   CFG_MSG_NMEA[7] := $03
@@ -257,11 +258,11 @@ PUB TURN_OFF_NMEA | _pkt, nTry, idx
     TXMSG(@CFG_MSG_NMEA, 16)
     _pkt := GETACK
   until _pkt == ACKACK OR (nTry++ == 5)
-  uarts.str(debug, string(13, "After Turn off GSV nTry, ack/nak = "))
-  uarts.dec(debug, nTry)
-  uarts.putc(debug, " ")
-  uarts.dec(debug, _pkt)
-  uarts.putc(debug, 13)
+'  uarts.str(debug, string(13, "After Turn off GSV nTry, ack/nak = "))
+'  uarts.dec(debug, nTry)
+'  uarts.putc(debug, " ")
+'  uarts.dec(debug, _pkt)
+'  uarts.putc(debug, 13)
 
   CFG_MSG_NMEA[6] := $F0
   CFG_MSG_NMEA[7] := $08
@@ -276,11 +277,11 @@ PUB TURN_OFF_NMEA | _pkt, nTry, idx
     TXMSG(@CFG_MSG_NMEA, 16)
     _pkt := GETACK
   until _pkt == ACKACK OR (nTry++ == 5)
-  uarts.str(debug, string(13, "After Turn off ZDA nTry, ack/nak = "))
-  uarts.dec(debug, nTry)
-  uarts.putc(debug, " ")
-  uarts.dec(debug, _pkt)
-  uarts.putc(debug, 13)
+'  uarts.str(debug, string(13, "After Turn off ZDA nTry, ack/nak = "))
+'  uarts.dec(debug, nTry)
+'  uarts.putc(debug, " ")
+'  uarts.dec(debug, _pkt)
+'  uarts.putc(debug, 13)
 
   CFG_MSG_NMEA[6] := $F0
   CFG_MSG_NMEA[7] := $04
@@ -295,11 +296,11 @@ PUB TURN_OFF_NMEA | _pkt, nTry, idx
     TXMSG(@CFG_MSG_NMEA, 16)
     _pkt := GETACK
   until _pkt == ACKACK OR (nTry++ == 5)
-  uarts.str(debug, string(13, "After Turn off RMC nTry, ack/nak = "))
-  uarts.dec(debug, nTry)
-  uarts.putc(debug, " ")
-  uarts.dec(debug, _pkt)
-  uarts.putc(debug, 13)
+'  uarts.str(debug, string(13, "After Turn off RMC nTry, ack/nak = "))
+'  uarts.dec(debug, nTry)
+'  uarts.putc(debug, " ")
+'  uarts.dec(debug, _pkt)
+'  uarts.putc(debug, 13)
 
   CFG_MSG_NMEA[6] := $F0
   CFG_MSG_NMEA[7] := $05
@@ -314,14 +315,14 @@ PUB TURN_OFF_NMEA | _pkt, nTry, idx
     TXMSG(@CFG_MSG_NMEA, 16)
     _pkt := GETACK
   until _pkt == ACKACK OR (nTry++ == 5)
-  uarts.str(debug, string(13, "After Turn off VTG nTry, ack/nak = "))
-  uarts.dec(debug, nTry)
-  uarts.putc(debug, " ")
-  uarts.dec(debug, _pkt)
-  uarts.putc(debug, 13)
+'  uarts.str(debug, string(13, "After Turn off VTG nTry, ack/nak = "))
+'  uarts.dec(debug, nTry)
+'  uarts.putc(debug, " ")
+'  uarts.dec(debug, _pkt)
+'  uarts.putc(debug, 13)
 
 PUB TURN_ON_RAW | _pkt, nTry, idx
-  uarts.str(debug, string(13, "Turning ON raw messages.",13))
+  UARTS.STR(DEBUG, string(13, "$PSMSG, GPS RAW ON"))
   ' turn on POSLLH
   CFG_MSG[6] := $01
   CFG_MSG[7] := $02
@@ -334,11 +335,11 @@ PUB TURN_ON_RAW | _pkt, nTry, idx
     TXMSG(@CFG_MSG, 16)
     _pkt := GETACK
   until _pkt == ACKACK OR (nTry++ == 5)
-  uarts.str(debug, string(13, "After Turn ON POSLLH nTry, ack/nak = "))
-  uarts.dec(debug, nTry)
-  uarts.putc(debug, " ")
-  uarts.dec(debug, _pkt)
-  uarts.putc(debug, 13)
+'  uarts.str(debug, string(13, "After Turn ON POSLLH nTry, ack/nak = "))
+'  uarts.dec(debug, nTry)
+'  uarts.putc(debug, " ")
+'  uarts.dec(debug, _pkt)
+'  uarts.putc(debug, 13)
 
   ' turn on TIMEGPS
   CFG_MSG[6] := $01
@@ -352,11 +353,11 @@ PUB TURN_ON_RAW | _pkt, nTry, idx
     TXMSG(@CFG_MSG, 16)
     _pkt := GETACK
   until _pkt == ACKACK OR (nTry++ == 5)
-  uarts.str(debug, string(13, "After Turn ON TIMEGPS nTry, ack/nak = "))
-  uarts.dec(debug, nTry)
-  uarts.putc(debug, " ")
-  uarts.dec(debug, _pkt)
-  uarts.putc(debug, 13)
+'  uarts.str(debug, string(13, "After Turn ON TIMEGPS nTry, ack/nak = "))
+'  uarts.dec(debug, nTry)
+'  uarts.putc(debug, " ")
+'  uarts.dec(debug, _pkt)
+'  uarts.putc(debug, 13)
 
   ' turn on TIMEUTC
   CFG_MSG[6] := $01
@@ -370,11 +371,11 @@ PUB TURN_ON_RAW | _pkt, nTry, idx
     TXMSG(@CFG_MSG, 16)
     _pkt := GETACK
   until _pkt == ACKACK OR (nTry++ == 5)
-  uarts.str(debug, string(13, "After Turn ON TIMEUTC nTry, ack/nak = "))
-  uarts.dec(debug, nTry)
-  uarts.putc(debug, " ")
-  uarts.dec(debug, _pkt)
-  uarts.putc(debug, 13)
+'  uarts.str(debug, string(13, "After Turn ON TIMEUTC nTry, ack/nak = "))
+'  uarts.dec(debug, nTry)
+'  uarts.putc(debug, " ")
+'  uarts.dec(debug, _pkt)
+'  uarts.putc(debug, 13)
 
   ' turn on STATUS
   CFG_MSG[6] := $01
@@ -388,11 +389,11 @@ PUB TURN_ON_RAW | _pkt, nTry, idx
     TXMSG(@CFG_MSG, 16)
     _pkt := GETACK
   until _pkt == ACKACK OR (nTry++ == 5)
-  uarts.str(debug, string(13, "After Turn ON STATUS nTry, ack/nak = "))
-  uarts.dec(debug, nTry)
-  uarts.putc(debug, " ")
-  uarts.dec(debug, _pkt)
-  uarts.putc(debug, 13)
+'  uarts.str(debug, string(13, "After Turn ON STATUS nTry, ack/nak = "))
+'  uarts.dec(debug, nTry)
+'  uarts.putc(debug, " ")
+'  uarts.dec(debug, _pkt)
+'  uarts.putc(debug, 13)
 
   ' turn on SVINFO
   CFG_MSG[6] := $01
@@ -406,11 +407,11 @@ PUB TURN_ON_RAW | _pkt, nTry, idx
     TXMSG(@CFG_MSG, 16)
     _pkt := GETACK
   until _pkt == ACKACK OR (nTry++ == 5)
-  uarts.str(debug, string(13, "After Turn ON SVINFO nTry, ack/nak = "))
-  uarts.dec(debug, nTry)
-  uarts.putc(debug, " ")
-  uarts.dec(debug, _pkt)
-  uarts.putc(debug, 13)
+'  uarts.str(debug, string(13, "After Turn ON SVINFO nTry, ack/nak = "))
+'  uarts.dec(debug, nTry)
+'  uarts.putc(debug, " ")
+'  uarts.dec(debug, _pkt)
+'  uarts.putc(debug, 13)
 
   ' turn on RAW
   CFG_MSG[6] := $02
@@ -424,14 +425,14 @@ PUB TURN_ON_RAW | _pkt, nTry, idx
     TXMSG(@CFG_MSG, 16)
     _pkt := GETACK
   until _pkt == ACKACK OR (nTry++ == 5)
-  uarts.str(debug, string(13, "After Turn ON RAW nTry, ack/nak = "))
-  uarts.dec(debug, nTry)
-  uarts.putc(debug, " ")
-  uarts.dec(debug, _pkt)
-  uarts.putc(debug, 13)
+'  uarts.str(debug, string(13, "After Turn ON RAW nTry, ack/nak = "))
+'  uarts.dec(debug, nTry)
+'  uarts.putc(debug, " ")
+'  uarts.dec(debug, _pkt)
+'  uarts.putc(debug, 13)
 
 PUB TURN_ON_PPS | _pkt, nTry, idx
-  uarts.str(debug, string(13, "Set up on PPS.",13))
+  UARTS.STR(DEBUG, string(13, "$PSMSG, 1PPS ON"))
   ' set up time pulses
 '  repeat idx from 0 to 39
 '    uarts.hex(debug, CFG_TP5[idx], 2)
@@ -640,12 +641,14 @@ PUB PARSE_UBLOX_PACKET :retVal | i
 
     NAVSTATUS :
 '      TOWmS     := SWAP_BYTES_LONG(@statusPkt, 0)
-      gpsfix    := statusPkt[4]
+      statusFix    := statusPkt[4]
 
     NAVTIMEGPS :
 '      TOWmS     := SWAP_BYTES_LONG(@timegpsPkt, 0)
       leapS     := timegpsPkt[10]
+      gpsValid  := timegpsPkt[11]
 
+      accuracy  := timegpsPkt[12] |  timegpsPkt[13] << 8 | timegpsPkt[14] << 16 | timegpsPkt[15] << 24 
     NAVTIMEUTC :
       TOWmS     := SWAP_BYTES_LONG(@timeutcPkt, 0)
       utcyear   := SWAP_BYTES_WORD(@timeutcPkt, 12) 'timeutcPkt[12] | timeutcPkt[13] << 8 ' bytes 12-13
@@ -706,16 +709,18 @@ PUB SWAP_BYTES_WORD(wA, ofs)
   return byte[wA][ofs] | byte[wA][ofs+1] << 8
 
 PUB UTC_TIME_VALID
-  if (utcValid & %0100) == %0100
-    return TRUE
-  else
-    return FALSE
+
+  return utcValid
+'  if (utcValid & %0100) == %0100
+'    return TRUE
+'  else
+'    return FALSE
     
 PUB GET_PKT
   return pkt
 
-PUB GET_GPSFIX
-  return gpsfix
+PUB GET_STATUS_FIX
+  return statusFix
 
 PUB GET_LONGITUDE
   return longitude
@@ -750,12 +755,15 @@ PUB YEAR_MONTH_DAY
 PUB HOUR_MINUTE_SECOND
   return (utchour * 10_000 + utcmin * 100 + utcsec)
 
-PUB UPDATE_GPSFIX_LINES
-'  STR_GPSFIX          byte "Fix:  0 NSV:  00", 0
-  STR_GPSFIX[6]  := gpsfix + "0"
-  STR_GPSFIX[14] := nSV /  10 + "0"
-  STR_GPSFIX[15] := nSV // 10 + "0"
-  return @STR_GPSFIX
+PUB ACCURACY_NS
+  return accuracy
+
+PUB UPDATE_STATUS_FIX_LINES
+'  statusFixStr          byte "Fix:  0 NSV:  00", 0
+  statusFixStr[6]  := statusFix + "0"
+  statusFixStr[14] := nSV /  10 + "0"
+  statusFixStr[15] := nSV // 10 + "0"
+  return @statusFixStr
   
 PUB UPDATE_LAT_LINES | d, m, s
 ' uarts.dec(debug, latitude)
@@ -766,47 +774,47 @@ PUB UPDATE_LAT_LINES | d, m, s
   m := (||latitude - d * 10_000_000) * 60 / 10_000_000
   s := (||latitude - (d * 10_000_000 + m * 10_000_000 / 60)) * 3600 / 10_000_000  
   if latitude < 0
-    STR_GPSLAT[4] := "S"
-  bytemove(@STR_GPSLAT[6], Num.ToStr(d, Num#DEC3), 3)
-  bytemove(@STR_GPSLAT[9], Num.ToStr(m, Num#DEC3), 3)
-  bytemove(@STR_GPSLAT[12], Num.ToStr(s, Num#DEC3), 3)
-  STR_GPSLAT[9]  := " "
-  STR_GPSLAT[12] := 39  ' set to '
-  STR_GPSLAT[15] := 34  ' set to "
-  return @STR_GPSLAT
+    gpsLatStr[4] := "S"
+  bytemove(@gpsLatStr[6], Num.ToStr(d, Num#DEC3), 3)
+  bytemove(@gpsLatStr[9], Num.ToStr(m, Num#DEC3), 3)
+  bytemove(@gpsLatStr[12], Num.ToStr(s, Num#DEC3), 3)
+  gpsLatStr[9]  := " "
+  gpsLatStr[12] := 39  ' set to '
+  gpsLatStr[15] := 34  ' set to "
+  return @gpsLatStr
   
 PUB UPDATE_LON_LINES | d, m, s
   d := ||longitude / 10_000_000
   m := (||longitude - d * 10_000_000) * 60 / 10_000_000
   s := (||longitude - (d * 10_000_000 + m * 10_000_000 / 60)) * 3600 / 10_000_000 
   if longitude < 0
-    STR_GPSLON[6] := "W"
-  bytemove(@STR_GPSLON[5], Num.ToStr(d, Num#DEC4), 4)
-  bytemove(@STR_GPSLON[9], Num.ToStr(m, Num#DEC3), 3)
-  bytemove(@STR_GPSLON[12], Num.ToStr(s, Num#DEC3), 3)
-  STR_GPSLON[9]  := " "
-  STR_GPSLON[12] := 39
-  STR_GPSLON[15] := 34
-  return @STR_GPSLON
+    gpsLonStr[6] := "W"
+  bytemove(@gpsLonStr[5], Num.ToStr(d, Num#DEC4), 4)
+  bytemove(@gpsLonStr[9], Num.ToStr(m, Num#DEC3), 3)
+  bytemove(@gpsLonStr[12], Num.ToStr(s, Num#DEC3), 3)
+  gpsLonStr[9]  := " "
+  gpsLonStr[12] := 39
+  gpsLonStr[15] := 34
+  return @gpsLonStr
 
 PUB UPDATE_DATE_TIME_LINES
-  STR_GPS_TIME_DATE[0] := (utcyear//100)/10 + "0"
-  STR_GPS_TIME_DATE[1] :=  utcyear//10      + "0"
-  STR_GPS_TIME_DATE[2] :=  utcmonth/10      + "0"
-  STR_GPS_TIME_DATE[3] :=  utcmonth//10     + "0"
-  STR_GPS_TIME_DATE[4] :=  utcday/10        + "0"
-  STR_GPS_TIME_DATE[5] :=  utcday//10       + "0"
-  STR_GPS_TIME_DATE[6] := " "
-  STR_GPS_TIME_DATE[7] := " "
-  STR_GPS_TIME_DATE[8] :=  utchour/10       + "0"
-  STR_GPS_TIME_DATE[9] :=  utchour//10      + "0"
-  STR_GPS_TIME_DATE[10] := ":"
-  STR_GPS_TIME_DATE[11] := utcmin/10        + "0"
-  STR_GPS_TIME_DATE[12] := utcmin//10       + "0"
-  STR_GPS_TIME_DATE[13] := ":"
-  STR_GPS_TIME_DATE[14] := utcsec/10        + "0"
-  STR_GPS_TIME_DATE[15] := utcsec//10       + "0"
-  return @STR_GPS_TIME_DATE
+  gpsTimeDateStr[0] := (utcyear//100)/10 + "0"
+  gpsTimeDateStr[1] :=  utcyear//10      + "0"
+  gpsTimeDateStr[2] :=  utcmonth/10      + "0"
+  gpsTimeDateStr[3] :=  utcmonth//10     + "0"
+  gpsTimeDateStr[4] :=  utcday/10        + "0"
+  gpsTimeDateStr[5] :=  utcday//10       + "0"
+  gpsTimeDateStr[6] := " "
+  gpsTimeDateStr[7] := " "
+  gpsTimeDateStr[8] :=  utchour/10       + "0"
+  gpsTimeDateStr[9] :=  utchour//10      + "0"
+  gpsTimeDateStr[10] := ":"
+  gpsTimeDateStr[11] := utcmin/10        + "0"
+  gpsTimeDateStr[12] := utcmin//10       + "0"
+  gpsTimeDateStr[13] := ":"
+  gpsTimeDateStr[14] := utcsec/10        + "0"
+  gpsTimeDateStr[15] := utcsec//10       + "0"
+  return @gpsTimeDateStr
   
 PUB PAUSE_MS(mS)
   waitcnt(clkfreq/1000 * mS + cnt)
@@ -837,11 +845,11 @@ DAT 'CFG_MSG_NMEA
 DAT 'String constants
                            '0000000000111111
                            '0123456789012345
-  STR_GPSFIX          byte "Fix:  0 NSV:  00", 0
-  STR_GPSLAT          byte "LAT S  80D30M30S", 0
-  STR_GPSLON          byte "LON W 120D30M30S ", 0
-  STR_GPSDATE         byte "YYYY-MM-DD      ", 0
-  STR_GPSTIME         byte "HH:MM:SS        ", 0
-  STR_GPS_TIME_DATE   byte "YYMMDD  HH:MM:SS", 0
+  statusFixStr       byte "Fix:  0 NSV:  00", 0         
+  gpsLatStr          byte "LAT S  80D30M30S", 0
+  gpsLonStr          byte "LON W 120D30M30S ", 0
+  gpsDateStr         byte "YYYY-MM-DD      ", 0
+  gpsTimeStr         byte "HH:MM:SS        ", 0
+  gpsTimeDateStr     byte "YYMMDD  HH:MM:SS", 0
   
                
