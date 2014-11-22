@@ -345,7 +345,9 @@ PUB SET_EXPANDER_TO_LOW_POWER : response
   expVal1 := PGA_D_CS | PGA_C_CS | PGA_B_CS | PGA_A_CS | %0000
 
 ' EXP_2 : GPS_RESET | MAG_ACC_EN | OLED_EN | UBLOX_EN | WIFI_EN | 5V_ENABLE | LED1003 | LED1002     
-  expVal2 := %00000011  ' turn components OFF and turn LEDS OFF (high)
+
+  'fixme fixme - sak - leaves gumstix on
+  expVal2 := %00001011  ' turn components OFF and turn LEDS OFF (high)
 
   EXPANDER_WRITE(EXPANDER_1, expVal1)
   EXPANDER_WRITE(EXPANDER_2, expVal2)

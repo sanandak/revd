@@ -446,8 +446,8 @@ PUB DO_SOMETHING_USEFUL | rxByte, response, idx
   until response == -1 OR response == UBX#RXMRAW
   
   if response == UBX#RXMRAW                             ' have we collected all the data in this second?
-    UARTS.STR(DEBUG, string(13,"$PSMSG, FIFO: "))
-     UARTS.DEC(DEBUG, blocksInFIFO)                    ' if the gps buffer is empty put something into it
+    'UARTS.STR(DEBUG, string(13,"$PSMSG, FIFO: "))
+     'UARTS.DEC(DEBUG, blocksInFIFO)                    ' if the gps buffer is empty put something into it
     if gpsDataToWrite == MY_FALSE                      ' have the data we put there previously been written?
       longmove(@gpsBuffer, ubxBufferAddress, 256)      ' copy that info into this cog
       longmove(@gpsBuffer[129], @gpsBuffer[127], 126) ' move data over so we can insert header
@@ -775,10 +775,13 @@ PUB PROCESS_UART | idx
       START_ACQUISITION
 
     WRITE_TO_OLED :        'W
-      UARTS.STR(DEBUG, string(" Write to OLED: "))
-      UARTS.STR(DEBUG, @inUartBuf[2])
-      UARTS.PUTC(DEBUG, CR)
+      'UARTS.STR(DEBUG, string(" Write to OLED: "))
+      'UARTS.STR(DEBUG, @inUartBuf[2])
+      'UARTS.PUTC(DEBUG, CR)
+      PEBBLE.WRITE_TO_OLED(0, 2, @oledClrLine)
+      PAUSE_MS(25)
       PEBBLE.WRITE_TO_OLED(0, 2, @inUartBuf[2])
+      PAUSE_MS(25)
        
     OTHER: 
       UARTS.STR(DEBUG, string(" Unrecognized command."))
