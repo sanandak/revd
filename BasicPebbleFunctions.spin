@@ -33,7 +33,7 @@ CON ' I2C expander constants
   UBLOX_EN    = BIT_4
   OLED_EN     = BIT_5
   MAG_ACC_EN  = BIT_6
-  GPS_RESET   = BIT_7
+  GPS_RESET   = BIT_7        ' this is active LOW
 
 CON ' MUX settings
   INTERNAL = 0
@@ -345,9 +345,7 @@ PUB SET_EXPANDER_TO_LOW_POWER : response
   expVal1 := PGA_D_CS | PGA_C_CS | PGA_B_CS | PGA_A_CS | %0000
 
 ' EXP_2 : GPS_RESET | MAG_ACC_EN | OLED_EN | UBLOX_EN | WIFI_EN | 5V_ENABLE | LED1003 | LED1002     
-
-  'fixme fixme - sak - leaves gumstix on
-  expVal2 := %00001011  ' turn components OFF and turn LEDS OFF (high)
+  expVal2 := %00000011  ' turn components OFF and turn LEDS OFF (high)
 
   EXPANDER_WRITE(EXPANDER_1, expVal1)
   EXPANDER_WRITE(EXPANDER_2, expVal2)
@@ -362,7 +360,7 @@ PUB SET_EXPANDER_TO_LOW_POWER : response
   DIRA[DAC_CS]   := 1
   
   OUTA[RADIO_CS] := 1
-  OUTA[OLED_CS]  := 1
+  OUTA[OLED_CS]  := 0           ' current appears to leak from this device.  Since it's powered off don't worry about CS lineS
   OUTA[DAC_CS]   := 1
 
   DIRA[SHARED_MOSI] := 1
@@ -446,13 +444,13 @@ PUB GPS_ON
 ' Turn on the switch that allows 3.3V power to pass to the UBLOX
   expVal2 |= (UBLOX_EN | GPS_RESET)  ' and turn on both UBLOX
   EXPANDER_WRITE(EXPANDER_2, expVal2)
-  WRITE_TO_OLED(0, 1, string("UBLOX ON        "))
+  WRITE_TO_OLED(0, 1, string("GPS ON          "))
 
 PUB GPS_OFF
 ' Turn off the switch that allows 3.3V power to pass to the UBLOX
   expVal2 &= !(UBLOX_EN | GPS_RESET)  ' and turn on both UBLOX
   EXPANDER_WRITE(EXPANDER_2, expVal2)
-  WRITE_TO_OLED(0, 1, string("UBLOX OFF       "))
+  WRITE_TO_OLED(0, 1, string("GPS OFF         "))
 
 PUB MAG_ACC_ON
 ' Turn on the switch that allows 3.3V power to pass to the MAG/ACC
@@ -470,6 +468,8 @@ PUB OLED_ON
 ' Turn on the switch that allows 3.3V power to pass to the OLED
   expVal2 |= OLED_EN  ' and turn on  OLED
   EXPANDER_WRITE(EXPANDER_2, expVal2)
+
+  OUTA[OLED_CS] := 1   ' raise this CS pin.  It was low because we didn't want to power oled with leaking current
   PAUSE_MS(1)
   OLED_WRITE_COMMAND(FUNCTION_SET)
   OLED_WRITE_COMMAND(DISPLAY_OFF)
@@ -482,6 +482,7 @@ PUB OLED_OFF
 ' Turn off the switch that allows 3.3V power to pass to the OLED
   expVal2 &= !(OLED_EN)  ' and turn off OLED
   EXPANDER_WRITE(EXPANDER_2, expVal2)
+  OUTA[OLED_CS] := 0   ' lower this so we aren't powering the oled from the prop
 
 PUB SET_MUXES(chanA, chanB, chanC, chanD) | muxVal
 ' method that sets the muxes to internal or external for each of the 4 channels in one sweep
@@ -707,6 +708,11 @@ RETURNS: data retrieved from SPI transmission
     dataIn := (dataIn << 1) + INA[SHARED_MISO]              ' now read next bit from MISO
     OUTA[SHARED_SCLK] := 1                                    ' raise clock
 
+  ' set clock and MOSI to LOW on exit
+  OUTA[SHARED_MOSI] := 0
+  OUTA[SHARED_SCLK] := 0
+
+
 PUB LSM_INIT | lsmPresent
   lsmPresent := 0
   ' setup accelerometer
@@ -819,23 +825,17 @@ PUB EXPANDER_TOGGLE_BIT(deviceAddress, bitName)
   return FALSE
       
 PUB SLEEP(mainCogId) | i
-' make other items inputs
+
+' Turn off everything we can
+  SET_EXPANDER_TO_LOW_POWER
 
 ' shutdown all other cogs
   repeat i from 0 to 7
     if i <> mainCogId
       cogstop(i)
 
-  ' Turn off everything we can
-
-  SET_EXPANDER_TO_LOW_POWER
-
-  'DIRA[ANALOG_GUMSTIX_EN] := 1
-  'OUTA[ANALOG_GUMSTIX_EN] := 0
 
 ' switch clock to rcslow ' using the gadget gangster board as power supply
-'  _rcslow_prop          ' this uses: 1.5mA
-'  _rcfast_prop           ' this uses: 1.5mA
   _slow_prop
 
 PUB WAIT_FOR_TIME(modValue)
@@ -849,17 +849,18 @@ PUB WAIT_FOR_TIME(modValue)
   OLED_ON
   WRITE_TO_OLED(0,1,string("Waking System."))
 
-PUB SWITCHED_ON 
+PUB SWITCHED_ON(interval) 
   if INA[REED_SWITCH] == 0      ' is button "pressed"?
-    waitcnt(1_000 + cnt)   ' wait for .1 ms - debounce
+    waitcnt(clkfreq/1000 + cnt) ' wait for 1/10s debounce
     if INA[REED_SWITCH] == 0    ' is button still "pressed"
-      return TRUE
-    else
-      return FALSE
-      
-  else
-    PAUSE_MS(100)
-    return FALSE
+      return TRUE               ' if button is pressed return immediately
+                                ' otherwise check clock to see if we should wake up
+  READ_RTC_TIME
+  if (rtcTime[1]//interval)==(interval - 1) AND rtcTime[0] > 44
+    return TRUE                 ' if we are within 15 seconds of the interval minute
+                                ' return true
+
+  return FALSE                  ' otherwise it's not time to wake up so don't
 
 PUB WAKE_UP
     ' indicate that we've caught the complete button press
@@ -877,6 +878,7 @@ PUB WAKE_UP
     PAUSE_MS(50)
     LEDS_ON
 
+{this code is no longer used
 PUB WAIT_FOR_WAKE_UP
 
 ' now wait for the reed switch to be active
@@ -892,6 +894,7 @@ PUB WAIT_FOR_WAKE_UP
       LED1_OFF
 
   WAKE_UP
+}
   
 PUB SHORT_INPUTS(ch)
 ' this method shorts the inputs on the given channel and sets gain to 0
@@ -925,6 +928,22 @@ PUB SET_GAIN(_gain, ch) | gain, response, gainRegister
   WRITE_PGA(ch, gainRegister)        ' set gain register
 
   return gain
+
+PUB GAIN_BINARY_VAL(gain) | response
+'' method that decodes the gain enum settings
+
+  case gain
+     1..5    : response := %0000
+     6..15   : response := %0001
+     16..25  : response := %0010
+     26..35  : response := %0011
+     36..50  : response := %0100
+     51..70  : response := %0101
+     71..90  : response := %0111
+     other   : response := %0000
+
+
+  return response
 
 PRI WRITE_PGA(ch, pgaData) | tmp
 ' ch should be %0001-%1000, pgaData should be data to be clocked out to PGA

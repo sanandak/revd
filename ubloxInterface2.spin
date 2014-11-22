@@ -103,30 +103,30 @@ VAR
   
   byte nPktsPerSec                 ' keep track of number of packets in this sec
   byte class, msgid, pkt
-  long cntsAtHeader1
-  
-  long TOWmS                         ' ms from start of week
-  ' posllh
-  long longitude, latitude, height ' degrees scaled by 1e-7 and mm
-  ' status
   byte statusFix                      ' 0 = no fix, 2 = 2d, 3 = 3d
   ' timegps
   byte leapS
   byte gpsValid
-  long accuracy
-  ' timeutc
-  word utcyear
   byte utcmonth, utcday, utchour, utcmin, utcsec, utcValid
   ' svinfo
   byte nSV, svs[16] 'FIXME
 
   byte swVersion[30]
   byte hwVersion[10]
+  byte capturePPS  
 
   word gpsBufferIdx, payloadIdx, len
-  byte capturePPS  
+  word utcyear
+
+  long accuracy
   long cntsAtPPS 
   long expanderId     ' set up a register that contains the complete address for the I2C expander
+  long cntsAtHeader1
+  
+  long TOWmS                         ' ms from start of week
+  ' posllh
+  long longitude, latitude, height ' degrees scaled by 1e-7 and mm
+  ' status
 
 DAT ' GPS Config messages
   TIME_PULSE byte 
@@ -140,6 +140,8 @@ PUB INIT(_debug, _gps)
   gpsBufferIdx  := 0
   payloadIdx := 0
 
+  return @ubxBuffer
+  
 PUB VERSION_POLL | nTry, idx, _pkt
   'query u-blox for sw/hw version 
   ' return -1 on failure, 0 on success (?)
@@ -186,7 +188,7 @@ PUB HWADDR
   return @hwVersion
 
 PUB TURN_OFF_NMEA | _pkt, nTry, idx
-  UARTS.STR(DEBUG, string(13, "$PSMSG, GPS NMEA OFF"))
+  UARTS.STR(DEBUG, string(13, "$PSMSG,GPS NMEA OFF"))
   ' turn off gll
   CFG_MSG_NMEA[6] := $F0
   CFG_MSG_NMEA[7] := $01
@@ -322,7 +324,7 @@ PUB TURN_OFF_NMEA | _pkt, nTry, idx
 '  uarts.putc(debug, 13)
 
 PUB TURN_ON_RAW | _pkt, nTry, idx
-  UARTS.STR(DEBUG, string(13, "$PSMSG, GPS RAW ON"))
+  UARTS.STR(DEBUG, string(13, "$PSMSG,GPS RAW ON"))
   ' turn on POSLLH
   CFG_MSG[6] := $01
   CFG_MSG[7] := $02
@@ -432,7 +434,7 @@ PUB TURN_ON_RAW | _pkt, nTry, idx
 '  uarts.putc(debug, 13)
 
 PUB TURN_ON_PPS | _pkt, nTry, idx
-  UARTS.STR(DEBUG, string(13, "$PSMSG, 1PPS ON"))
+  UARTS.STR(DEBUG, string(13, "$PSMSG,1PPS ON"))
   ' set up time pulses
 '  repeat idx from 0 to 39
 '    uarts.hex(debug, CFG_TP5[idx], 2)
