@@ -72,9 +72,13 @@ CON  'True/False constants
   MY_TRUE   = 0
   MY_FALSE  = 1
 
-CON ' Debounce time; how many counts (at rcslow which is ~20khz) should we wait for button deboune?
-  DEBOUNCE = 20_000 / 10
+CON ' REED switch button states
+  NOT_PRESSED       = 1         ' Reed switch is pulled high normally 
+  PRESSED           = 0         ' Pressed is actually logic 0  
   
+CON ' Acq enumerations
+ #0, TRIGGERED, CONTINUOUS, STAY_ASLEEP
+ 
 CON ' SRAM pins
   SRAM_CS            = 10                            ' CS pin for 23LC1024 SRAM
   SRAM_DO            = 12                            ' IO1 / DO / MISO pin
@@ -112,8 +116,16 @@ CON ' OLED CONSTANTS
   DEGREES         = %1101_1111
   TICK            = %0010_0111
   BLOCK           = %1111_1111     ' all pixel high
-  WRITE_TO_CGRAM  = %10
-  READ_FROM_CGRAM = %11
+  RS_BIT          = %10_0000_0000
+  RW_BIT          = %01_0000_0000
+  A0_B0_C0        = %000
+  A0_B0_C1        = %001
+  A0_B1_C0        = %010
+  A0_B1_C1        = %011
+  A1_B0_C0        = %100
+  A1_B0_C1        = %101
+  A1_B1_C0        = %110
+  A1_B1_C1        = %111
 
 CON ' directly wired pins
   REED_SWITCH       = 15
@@ -323,7 +335,7 @@ PUB INIT : response
 ' setup the initial values for the I2C expanders and deploy those values
   SET_EXPANDER_TO_LOW_POWER
 
-PUB RETURN_EXP1
+{PUB RETURN_EXP1
   return expVal1
 
 PUB RETURN_EXP2
@@ -338,7 +350,116 @@ PUB SET_EXP2_VAL(newValue)
   expVal2 := newValue
   EXPANDER_WRITE(EXPANDER_2, expVal2)
   return expVal2
+}  
+PUB SLEEP(mainCogId) | i
+
+' Turn off everything we can
+  SET_EXPANDER_TO_LOW_POWER
+
+' shutdown all other cogs
+  repeat i from 0 to 7
+    if i <> mainCogId
+      cogstop(i)
+
+' switch clock to XTAL1 with no PLL to save power
+  _slow_prop
+
+PUB SLEEP_2(mainCogId) | i
+
+' Turn off most stuff but leave the gumstix powered.  Use ONLY after sending shutdown message
+' to gumstix; this keeps the gumstix powered but it's not on.  This power will help keep the
+' gps backup available
+  SET_EXPANDER_TO_SLEEP
+
+' shutdown all other cogs
+  repeat i from 0 to 7
+    if i <> mainCogId
+      cogstop(i)
+
+' switch clock to XTAL1 with no PLL to save power
+  _slow_prop
+
+PUB SLEEP_3(mainCogId) | i
+' this version of sleep kills the gumstix but leaves the GPS on all the time.
+' hopefully this will solve the problem of the bad backup battery
+
+  SLEEP_ALL_BUT_GPS
+' shutdown all other cogs
+  repeat i from 0 to 7
+    if i <> mainCogId
+      cogstop(i)
+
+' switch clock to XTAL1 with no PLL to save power
+  _slow_prop
+
+PUB SLEEP_ALL_BUT_GPS
+' this differes from SET_EXPANDER_TO_LOW_POWER because this does not turn off the GUMSTIX
+' use ONLY when sleeping the gumstix AFTER a SHUTDOWN command
+' put the 2 expanders (and the LEDs they contain) into a know and low-power state
+' EXP_1 : PGA_D_CS | PGA_C_CS | PGA_B_CS | PGA_A_CS | MUX2SEL_3-4 | MUX2SEL_1-2 | MUX1SEL_3-4 | MUX1SEL_1-2
+  expVal1 := PGA_D_CS | PGA_C_CS | PGA_B_CS | PGA_A_CS | %0000
+
+' EXP_2 : GPS_RESET | MAG_ACC_EN | OLED_EN | UBLOX_EN | GUMSTIX_EN | 5V_ENABLE | LED1003 | LED1002     
+  expVal2 := %1001_1011  ' LEAVE GPS on AND GPS RESET high; leave gumstix enabled; turn OFF everything else; LEDS OFF (high)
+
+  EXPANDER_WRITE(EXPANDER_1, expVal1)
+  EXPANDER_WRITE(EXPANDER_2, expVal2)
+
+' we don't use the SRAM so make sure it's not selected
+  DIRA[SRAM_CS]  := 1           ' hold SRAM in RESET
+  OUTA[SRAM_CS]  := 1           ' hold SRAM in RESET
+
+' setup the shared SPI
+  DIRA[RADIO_CS] := 1
+  DIRA[OLED_CS]  := 1
+  DIRA[DAC_CS]   := 1
   
+  OUTA[RADIO_CS] := 1
+  OUTA[OLED_CS]  := 0           ' current appears to leak from this device.  Since it's powered off don't worry about CS lineS
+  OUTA[DAC_CS]   := 1
+
+  DIRA[SHARED_MOSI] := 1
+  OUTA[SHARED_MOSI] := 0
+
+  DIRA[SHARED_MISO] := 0
+  
+  DIRA[SHARED_SCLK] := 1
+  OUTA[SHARED_SCLK] := 0
+
+PUB SET_EXPANDER_TO_SLEEP
+' this differes from SET_EXPANDER_TO_LOW_POWER because this does not turn off the GUMSTIX
+' use ONLY when sleeping the gumstix AFTER a SHUTDOWN command
+' put the 2 expanders (and the LEDs they contain) into a know and low-power state
+' EXP_1 : PGA_D_CS | PGA_C_CS | PGA_B_CS | PGA_A_CS | MUX2SEL_3-4 | MUX2SEL_1-2 | MUX1SEL_3-4 | MUX1SEL_1-2
+  expVal1 := PGA_D_CS | PGA_C_CS | PGA_B_CS | PGA_A_CS | %0000
+
+' EXP_2 : GPS_RESET | MAG_ACC_EN | OLED_EN | UBLOX_EN | GUMSTIX_EN | 5V_ENABLE | LED1003 | LED1002     
+  expVal2 := %00001011  ' turn components OFF and turn LEDS OFF (high)
+
+  EXPANDER_WRITE(EXPANDER_1, expVal1)
+  EXPANDER_WRITE(EXPANDER_2, expVal2)
+
+' we don't use the SRAM so make sure it's not selected
+  DIRA[SRAM_CS]  := 1           ' hold SRAM in RESET
+  OUTA[SRAM_CS]  := 1           ' hold SRAM in RESET
+
+' setup the shared SPI
+  DIRA[RADIO_CS] := 1
+  DIRA[OLED_CS]  := 1
+  DIRA[DAC_CS]   := 1
+  
+  OUTA[RADIO_CS] := 1
+  OUTA[OLED_CS]  := 0           ' current appears to leak from this device.  Since it's powered off don't worry about CS lineS
+  OUTA[DAC_CS]   := 1
+
+  DIRA[SHARED_MOSI] := 1
+  OUTA[SHARED_MOSI] := 0
+
+  DIRA[SHARED_MISO] := 0
+  
+  DIRA[SHARED_SCLK] := 1
+  OUTA[SHARED_SCLK] := 0
+
 PUB SET_EXPANDER_TO_LOW_POWER : response 
 ' put the 2 expanders (and the LEDs they contain) into a know and low-power state
 ' EXP_1 : PGA_D_CS | PGA_C_CS | PGA_B_CS | PGA_A_CS | MUX2SEL_3-4 | MUX2SEL_1-2 | MUX1SEL_3-4 | MUX1SEL_1-2
@@ -415,7 +536,7 @@ PUB ANALOG_ON
 
   EXPANDER_WRITE(EXPANDER_1, expVal1)
   EXPANDER_WRITE(EXPANDER_2, expVal2)
-  WRITE_TO_OLED(0, 1, string("Analog ON       "))
+'  WRITE_TO_OLED(0, 1, string("Analog ON       "))
 
 PUB ANALOG_OFF
 ' pull all the PGA CS lines high
@@ -425,62 +546,295 @@ PUB ANALOG_OFF
 
   EXPANDER_WRITE(EXPANDER_1, expVal1)
   EXPANDER_WRITE(EXPANDER_2, expVal2)
-  WRITE_TO_OLED(0, 1, string("Analog OFF      "))
+'  WRITE_TO_OLED(0, 1, string("Analog OFF      "))
   
 PUB GUMSTIX_ON
 ' Turn on the switch that sends allows 3.3V power to pass to the Gumstix
   expVal2 |= GUMSTIX_EN 
   EXPANDER_WRITE(EXPANDER_2, expVal2)
-  WRITE_TO_OLED(0, 1, string("Gumstix ON      "))
+'  WRITE_TO_OLED(0, 1, string("Gumstix ON      "))
   PAUSE_MS(2000)                ' give the gumstix time to boot                                 
    
 PUB GUMSTIX_OFF
 ' Turn off the switch that sends allows 3.3V power to pass to the Gumstix
   expVal2 &= !GUMSTIX_EN 
   EXPANDER_WRITE(EXPANDER_2, expVal2)
-  WRITE_TO_OLED(0, 1, string("Gumstix OFF     "))
+'  WRITE_TO_OLED(0, 1, string("Gumstix OFF     "))
  
 PUB GPS_ON
 ' Turn on the switch that allows 3.3V power to pass to the UBLOX
   expVal2 |= (UBLOX_EN | GPS_RESET)  ' and turn on both UBLOX
   EXPANDER_WRITE(EXPANDER_2, expVal2)
-  WRITE_TO_OLED(0, 1, string("GPS ON          "))
+'  WRITE_TO_OLED(0, 1, string("GPS ON          "))
 
 PUB GPS_OFF
 ' Turn off the switch that allows 3.3V power to pass to the UBLOX
   expVal2 &= !(UBLOX_EN | GPS_RESET)  ' and turn on both UBLOX
   EXPANDER_WRITE(EXPANDER_2, expVal2)
-  WRITE_TO_OLED(0, 1, string("GPS OFF         "))
+'  WRITE_TO_OLED(0, 1, string("GPS OFF         "))
 
 PUB MAG_ACC_ON
 ' Turn on the switch that allows 3.3V power to pass to the MAG/ACC
   expVal2 |= MAG_ACC_EN  ' and turn on both MAG/ACC
   EXPANDER_WRITE(EXPANDER_2, expVal2)
-  WRITE_TO_OLED(0, 1, string("MAG/ACC ON      "))
+'  WRITE_TO_OLED(0, 1, string("MAG/ACC ON      "))
 
 PUB MAG_ACC_OFF
 ' Turn off the switch that allows 3.3V power to pass to the MAG/ACC
   expVal2 &= !MAG_ACC_EN  ' and turn on both MAG/ACC
   EXPANDER_WRITE(EXPANDER_2, expVal2)
-  WRITE_TO_OLED(0, 1, string("MAG/ACC OFF     "))
+'  WRITE_TO_OLED(0, 1, string("MAG/ACC OFF     "))
 
 PUB OLED_ON
 ' Turn on the switch that allows 3.3V power to pass to the OLED
   expVal2 |= OLED_EN  ' and turn on  OLED
+  expVal2 |= EN_5V   ' raise the 5V line
   EXPANDER_WRITE(EXPANDER_2, expVal2)
 
-  OUTA[OLED_CS] := 1   ' raise this CS pin.  It was low because we didn't want to power oled with leaking current
-  PAUSE_MS(1)
-  OLED_WRITE_COMMAND(FUNCTION_SET)
-  OLED_WRITE_COMMAND(DISPLAY_OFF)
-  OLED_WRITE_COMMAND(CLEAR_DISPLAY)
-  OLED_WRITE_COMMAND(ENTRY_MODE_2)
-  OLED_WRITE_COMMAND(RETURN_HOME)
-  OLED_WRITE_COMMAND(DISPLAY_ON) 
+' setup the shared SPI
+  DIRA[RADIO_CS] := 1
+  DIRA[OLED_CS]  := 1
+  DIRA[DAC_CS]   := 1
+  
+  OUTA[RADIO_CS] := 1
+  OUTA[OLED_CS]  := 1           ' current appears to leak from this device.  Since it's powered off don't worry about CS lineS
+  OUTA[DAC_CS]   := 1
+
+  DIRA[SHARED_MOSI] := 1
+  OUTA[SHARED_MOSI] := 0
+
+  DIRA[SHARED_MISO] := 0
+  
+  DIRA[SHARED_SCLK] := 1
+  OUTA[SHARED_SCLK] := 1       ' this is set to 1 and I'm not sure why; just testing it
+
+  OLED_INIT
+
+PUB OLED_INIT
+' method that sets up the display for use
+  OLED_COMMAND($38)   ' Function Set
+  OLED_COMMAND($08)   ' Display OFF
+  OLED_COMMAND($01)   ' Display Clear
+  PAUSE_MS(1)         ' Additional delay to allow Display Clear to complete
+  OLED_COMMAND($06)   ' Entry Mode Set
+  OLED_COMMAND($02)   ' Home Command
+
+  ' now create the four custom characters
+  INIT_A0_B0_C0
+  INIT_A0_B0_C1
+  INIT_A0_B1_C0
+  INIT_A0_B1_C1
+  INIT_A1_B0_C0
+  INIT_A1_B0_C1
+  INIT_A1_B1_C0
+  INIT_A1_B1_C1
+
+  OLED_COMMAND($0C)              ' Turn ON OLED
+
+PRI INIT_A0_B0_C0 ' not really needed since this is just an empty space                                                    
+'// Create the custom character in CGRAM.
+'// DDRAM address in Font Table is $00.
+'// Address location increments automatically after each write to CGRAM.
+   OLED_COMMAND($40)             ' Set CGRAM start address
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+
+PRI INIT_A0_B0_C1                                                     
+'// Create the custom character in CGRAM.
+'// DDRAM address in Font Table is $00.
+'// Address location increments automatically after each write to CGRAM.
+   OLED_COMMAND($48)             ' Set CGRAM start address
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
+   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
+
+PRI INIT_A0_B1_C0                                                     
+'// Create the custom character in CGRAM.
+'// DDRAM address in Font Table is $00.
+'// Address location increments automatically after each write to CGRAM.
+   OLED_COMMAND($50)             ' Set CGRAM start address
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
+   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+
+PRI INIT_A0_B1_C1                                                     
+'// Create the custom character in CGRAM.
+'// DDRAM address in Font Table is $00.
+'// Address location increments automatically after each write to CGRAM.
+   OLED_COMMAND($58)             ' Set CGRAM start address
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
+   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
+   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
+
+PRI INIT_A1_B0_C0                                                     
+'// Create the custom character in CGRAM.
+'// DDRAM address in Font Table is $00.
+'// Address location increments automatically after each write to CGRAM.
+   OLED_COMMAND($60)             ' Set CGRAM start address
+   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
+   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+
+PRI INIT_A1_B0_C1                                                     
+'// Create the custom character in CGRAM.
+'// DDRAM address in Font Table is $00.
+'// Address location increments automatically after each write to CGRAM.
+   OLED_COMMAND($68)             ' Set CGRAM start address
+   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
+   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
+   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
+
+PRI INIT_A1_B1_C0                                                     
+'// Create the custom character in CGRAM.
+'// DDRAM address in Font Table is $00.
+'// Address location increments automatically after each write to CGRAM.
+   OLED_COMMAND($70)             ' Set CGRAM start address
+   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
+   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
+   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+
+PRI INIT_A1_B1_C1                                                     
+'// Create the custom character in CGRAM.
+'// DDRAM address in Font Table is $00.
+'// Address location increments automatically after each write to CGRAM.
+   OLED_COMMAND($78)             ' Set CGRAM start address
+   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
+   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
+   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
+   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
+
+PUB OLED_WRITE_LINE1(stringPtr)
+'// Write character arry data to the first line of the display.
+
+  OLED_COMMAND(%1000_0000)       ' Set DDRAM address to beginning of line1
+  repeat strsize(stringPtr)
+    OLED_DATA(byte[stringPtr++]) ' Drive characters onto the display
+
+PUB OLED_WRITE_LINE2(stringPtr)
+'// Write character arry data to the second line of the display.
+
+  OLED_COMMAND(%1100_0000)       ' DDRAM address to beginning of line2
+  repeat strsize(stringPtr)
+    OLED_DATA(byte[stringPtr++]) ' Drive characters onto the display
+
+PUB OLED_COMMAND(Command)
+'// Command Write
+'// RS = 0 and RW = 0.
+  OUTA[OLED_CS]     := 0   ' lower CS line to enable the display
+  SHIFT_OUT_TO_OLED(Command)     ' Call the data byte driver function
+  OUTA[OLED_CS]     := 1   ' raise CS line to disable the display
+  PAUSE_MS(1)              ' Provide time for command to execute
+
+PUB OLED_DATA(RAM_data)
+'// RAM Write
+'// RS = 1 and RW = 0.
+  OUTA[OLED_CS]     := 0   ' lower CS line to enable the display
+  RAM_data |= $0200        ' Enable the RS bit
+  SHIFT_OUT_TO_OLED(RAM_data)    ' Call the data byte driver function
+  OUTA[OLED_CS]     := 1   ' raise CS line to disable the display
+  'PAUSE_MS(1)              ' Provide time for data write to execute
+
+PUB SHIFT_OUT_TO_OLED(dataOut)
+'// Low level routine that clocks in the serial command/data to the diaplay
+'// Data is clocked into display on the rising edge of the Clock
+'// 10 bits of data must be clocked into the display.
+
+  dataOut ><= 10             ' reverse the lowest 10 bits
+'  repeat 10                 ' unrolled this loop to speed it up a bit
+    OUTA[SHARED_SCLK] := 0                         ' drop clock
+    OUTA[SHARED_MOSI] := (dataOut & %01)           ' place next bit on MOSI
+    dataOut >>= 1
+    OUTA[SHARED_SCLK] := 1                         ' raise clock
+
+    OUTA[SHARED_SCLK] := 0                         ' drop clock
+    OUTA[SHARED_MOSI] := (dataOut & %01)           ' place next bit on MOSI
+    dataOut >>= 1
+    OUTA[SHARED_SCLK] := 1                         ' raise clock
+
+    OUTA[SHARED_SCLK] := 0                         ' drop clock
+    OUTA[SHARED_MOSI] := (dataOut & %01)           ' place next bit on MOSI
+    dataOut >>= 1
+    OUTA[SHARED_SCLK] := 1                         ' raise clock
+
+    OUTA[SHARED_SCLK] := 0                         ' drop clock
+    OUTA[SHARED_MOSI] := (dataOut & %01)           ' place next bit on MOSI
+    dataOut >>= 1
+    OUTA[SHARED_SCLK] := 1                         ' raise clock
+
+    OUTA[SHARED_SCLK] := 0                         ' drop clock
+    OUTA[SHARED_MOSI] := (dataOut & %01)           ' place next bit on MOSI
+    dataOut >>= 1
+    OUTA[SHARED_SCLK] := 1                         ' raise clock
+
+    OUTA[SHARED_SCLK] := 0                         ' drop clock
+    OUTA[SHARED_MOSI] := (dataOut & %01)           ' place next bit on MOSI
+    dataOut >>= 1
+    OUTA[SHARED_SCLK] := 1                         ' raise clock
+
+    OUTA[SHARED_SCLK] := 0                         ' drop clock
+    OUTA[SHARED_MOSI] := (dataOut & %01)           ' place next bit on MOSI
+    dataOut >>= 1
+    OUTA[SHARED_SCLK] := 1                         ' raise clock
+
+    OUTA[SHARED_SCLK] := 0                         ' drop clock
+    OUTA[SHARED_MOSI] := (dataOut & %01)           ' place next bit on MOSI
+    dataOut >>= 1
+    OUTA[SHARED_SCLK] := 1                         ' raise clock
+
+    OUTA[SHARED_SCLK] := 0                         ' drop clock
+    OUTA[SHARED_MOSI] := (dataOut & %01)           ' place next bit on MOSI
+    dataOut >>= 1
+    OUTA[SHARED_SCLK] := 1                         ' raise clock
+
+    OUTA[SHARED_SCLK] := 0                         ' drop clock
+    OUTA[SHARED_MOSI] := (dataOut & %01)           ' place next bit on MOSI
+    dataOut >>= 1
+    OUTA[SHARED_SCLK] := 1                         ' raise clock
 
 PUB OLED_OFF
 ' Turn off the switch that allows 3.3V power to pass to the OLED
   expVal2 &= !(OLED_EN)  ' and turn off OLED
+  expVal2 &= !EN_5V   ' raise the 5V line
   EXPANDER_WRITE(EXPANDER_2, expVal2)
   OUTA[OLED_CS] := 0   ' lower this so we aren't powering the oled from the prop
 
@@ -608,21 +962,24 @@ PUB WRITE_TO_DAC(newDacValue)| dacCode
 
   OUTA[DAC_CS]  := 1                                    ' raise CS line
 
-PUB WRITE_TO_OLED(x, y, stringAddress)
+{PUB WRITE_TO_OLED(x, y, stringAddress)
   OLED_GOTO_XY(x, y)
   OLED_WRITE_STRING(stringAddress)  
-
-PRI OLED_GOTO_XY(xPos, yPos) | position
+}
+{PRI OLED_GOTO_XY(xPos, yPos) | position
 '' method to position cursor
-'' treats top line (upper most) is line ypos=1, lower line is ypos=2
+'' treats top line (upper most) as line ypos=1, lower line is ypos=2
 '' far left of display is xpos=0; far right is xpos=15
-  position := xPos <# $0F
+  position := xPos & $0F ' xpositin is lower nibble and should be between $00-$0F
+  
   if yPos == 2
-    position += $40
-  position |= $80
+    position |= $40 ' second line is indicated by $4 in the upper nibble
+    
+  position |= $80   ' make sure DB7 is high so this will be seen as a set DDRAM Address command
   OLED_WRITE_COMMAND(position)
-
-PRI OLED_WRITE_COMMAND(dataOut) | dataIn
+}
+{PUB OLED_WRITE_COMMAND(dataOut) | dataIn
+' clock out 10 data bits
   dataIn := 0
 
   ' lower CS line
@@ -658,15 +1015,15 @@ PRI OLED_WRITE_COMMAND(dataOut) | dataIn
   
   ' at this point, the data have been written and read, return result
   return ( dataIn )            
-
-PRI OLED_WRITE_STRING(stringPtr)
+}
+{PRI OLED_WRITE_STRING(stringPtr)
   OLED_INIT
   repeat strsize(stringPtr)
     OLED_WRITE_DATA(byte[stringPtr++])
 
   OUTA[OLED_CS]  := 1                                    ' raise CS line
-
-PUB OLED_INIT 
+}
+{PUB OLED_INIT 
 {{
 
 }}
@@ -682,8 +1039,8 @@ PUB OLED_INIT
   OUTA[SHARED_SCLK] := 0                                    ' drop clock
   OUTA[SHARED_MOSI] := 0                                    ' place 0 on MOSI
   OUTA[SHARED_SCLK] := 1                                    ' raise clock
-
-PUB OLED_WRITE_DATA(dataOut) | dataIn
+}
+{PUB OLED_WRITE_DATA(dataOut) | dataIn
 {{
 DESCRIPTION: This method reads data from the SPI lines while writing (a bit at a time)
 (SPI is a circular buffer protocal), This is an optimized 8-bit read/write
@@ -711,7 +1068,7 @@ RETURNS: data retrieved from SPI transmission
   ' set clock and MOSI to LOW on exit
   OUTA[SHARED_MOSI] := 0
   OUTA[SHARED_SCLK] := 0
-
+}
 
 PUB LSM_INIT | lsmPresent
   lsmPresent := 0
@@ -824,53 +1181,71 @@ PUB EXPANDER_TOGGLE_BIT(deviceAddress, bitName)
 
   return FALSE
       
-PUB SLEEP(mainCogId) | i
-
-' Turn off everything we can
-  SET_EXPANDER_TO_LOW_POWER
-
-' shutdown all other cogs
-  repeat i from 0 to 7
-    if i <> mainCogId
-      cogstop(i)
-
-
-' switch clock to rcslow ' using the gadget gangster board as power supply
-  _slow_prop
-
 PUB WAIT_FOR_TIME(modValue)
   repeat
     PAUSE_MS(700)
     READ_RTC_TIME
-  until (rtcTime[1]//modValue)==(modValue - 1) AND rtcTime[0] == 45
+  until (rtcTime[1]//modValue)==(modValue - 1) AND rtcTime[0] == 40
   
-  _rc_to_fast_prop
+  '_rc_to_fast_prop
+  _slow_to_fast_prop
   INIT
   OLED_ON
-  WRITE_TO_OLED(0,1,string("Waking System."))
+  OLED_WRITE_LINE1(string("Waking System."))
 
 PUB SWITCHED_ON(interval) 
-  if INA[REED_SWITCH] == 0      ' is button "pressed"?
+{  if INA[REED_SWITCH] == 0      ' is button "pressed"?
     waitcnt(clkfreq/1000 + cnt) ' wait for 1/10s debounce
     if INA[REED_SWITCH] == 0    ' is button still "pressed"
       return TRUE               ' if button is pressed return immediately
                                 ' otherwise check clock to see if we should wake up
-  READ_RTC_TIME
-  if (rtcTime[1]//interval)==(interval - 1) AND rtcTime[0] > 44
-    return TRUE                 ' if we are within 15 seconds of the interval minute
-                                ' return true
+}
 
-  return FALSE                  ' otherwise it's not time to wake up so don't
+' is it time for a trigger recording?
+  READ_RTC_TIME
+  if (rtcTime[1]//interval)==(interval - 1) AND rtcTime[0] > 40
+    return 1              ' if we are within 20 seconds of the interval minute
+
+' has there been a button press?
+  if INA[REED_SWITCH] == NOT_PRESSED   ' we can't make a decision until the button is no longer pressed
+    waitcnt( cnt+625_000 )             ' debounce for .1 sec
+    if INA[REED_SWITCH] == NOT_PRESSED ' if switch is STILL not pressed
+      case PHSA
+        1_562_500..6_250_000     : ' button pressed for .25-1 sec
+           return 2
+        31_250_000..62_500_000 : ' button pressed for 5-10 sec
+           return 3
+      
+  return -1              ' otherwise it's not time to wake up so don't
+
+
+PUB SWITCH_OFF(recordLength,second)
+' this is the code for sleeping the system
+' did someone press the button for a medium time?
+  'if (PHSA > (clkfreq*5)) AND INA[REED_SWITCH] == NOT_PRESSED
+  '  return 0                 ' time to shutdown
+
+  if recordLength == 0          ' recordLength == 0 means we are in continuous mode
+    return 1
+
+  if second == recordLength     ' if the current second is the same as the record length
+    return 2                 ' then we should shutdown  
 
 PUB WAKE_UP
     ' indicate that we've caught the complete button press
+  'GUMSTIX_OFF ' we never fully turned off the gumstix only put it into powerdown mode; now turn it off
   LEDS_ON
-  
+  GUMSTIX_ON  ' now turn it back on
+
+
   ' return to full speed
-  _rc_to_fast_prop
-  INIT
+  '_rc_to_fast_prop
+  _slow_to_fast_prop
+  'INIT           ' not sure why this was in here; removed 27 Nov 11:30am
   OLED_ON
-  WRITE_TO_OLED(0,1,string("Waking System."))
+  OLED_INIT
+  PAUSE_MS(10)
+  OLED_WRITE_LINE1(string("Waking System."))
   
   repeat 10
     PAUSE_MS(50)
@@ -878,24 +1253,7 @@ PUB WAKE_UP
     PAUSE_MS(50)
     LEDS_ON
 
-{this code is no longer used
-PUB WAIT_FOR_WAKE_UP
 
-' now wait for the reed switch to be active
-  DIRA[REED_SWITCH]~       ' set to an input
-
-  repeat
-    waitpeq(0, |<REED_SWITCH, 0) ' wait for REED_SWITCH to go LOW
-    LED1_ON ' indicate we caught that press.  
-    waitcnt(1_000 + cnt)   ' wait for .1 ms - debounce
-    if INA[REED_SWITCH] == 0
-      quit
-    else
-      LED1_OFF
-
-  WAKE_UP
-}
-  
 PUB SHORT_INPUTS(ch)
 ' this method shorts the inputs on the given channel and sets gain to 0
 
