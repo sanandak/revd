@@ -710,6 +710,9 @@ PUB SWAP_BYTES_LONG(lA, ofs)
 PUB SWAP_BYTES_WORD(wA, ofs)  
   return byte[wA][ofs] | byte[wA][ofs+1] << 8
 
+PUB GPS_TIME_VALID ' Valid_leap_seconds | valid_week_number | valid_time_of_week
+  return gpsValid
+  
 PUB UTC_TIME_VALID
 
   return utcValid
@@ -760,6 +763,9 @@ PUB HOUR_MINUTE_SECOND
 PUB ACCURACY_NS
   return accuracy
 
+PUB NUM_SVs
+  return nSV
+  
 PUB UPDATE_STATUS_FIX_LINES
 '  statusFixStr          byte "Fix:  0 NSV:  00", 0
   statusFixStr[6]  := statusFix + "0"
