@@ -935,7 +935,8 @@ PUB PROCESS_UART | idx, pkpA, pkpB, pkpC, cursor
         PEBBLE.OLED_DATA(cursor)
     LINE_TWO :        '2
         inUartBuf[2+16] := 0                    ' make sure that we have a zero-terminated string that won't exceed OLED length
-        PEBBLE.OLED_WRITE_LINE2(@inUartBuf[inUartPtr[1]])' maybe we don't need the @ symbol?  
+        PEBBLE.OLED_WRITE_LINE2(string("                "))  ' clear the line before writing to it.
+        PEBBLE.OLED_WRITE_LINE2(@inUartBuf[inUartPtr[1]])    ' print the message  
                                                '  
       'UARTS.STR(DEBUG, string(" Write to OLED: "))
       'UARTS.STR(DEBUG, @inUartBuf[2])
