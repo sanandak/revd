@@ -1,4 +1,5 @@
-geopebble rev D code
-====
+#geopebble rev D Code
 
-propeller spin and asm code to control the logic board
+[propeller](http://www.parallax.com) spin and pasm code to control the logic board.
+
+## 
