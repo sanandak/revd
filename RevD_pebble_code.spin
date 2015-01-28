@@ -13,7 +13,7 @@
 '*                   back to simpler names.  I just want to be sure to keep
 '*                   a working copy.
 '* 26 Jan 2014    - version from WAIS.  Added LINE_TWO write
-'*
+'*   
 '**************************************************************
 CON ' Clock mode settings
   _CLKMODE = XTAL1 + PLL16X
