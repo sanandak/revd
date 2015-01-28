@@ -643,14 +643,14 @@ PUB PARSE_UBLOX_PACKET :retVal | i
 
     NAVSTATUS :
 '      TOWmS     := SWAP_BYTES_LONG(@statusPkt, 0)
-      statusFix    := statusPkt[4]
+      statusFix := statusPkt[4] 
 
     NAVTIMEGPS :
 '      TOWmS     := SWAP_BYTES_LONG(@timegpsPkt, 0)
       leapS     := timegpsPkt[10]
       gpsValid  := timegpsPkt[11]
-
       accuracy  := timegpsPkt[12] |  timegpsPkt[13] << 8 | timegpsPkt[14] << 16 | timegpsPkt[15] << 24 
+
     NAVTIMEUTC :
       TOWmS     := SWAP_BYTES_LONG(@timeutcPkt, 0)
       utcyear   := SWAP_BYTES_WORD(@timeutcPkt, 12) 'timeutcPkt[12] | timeutcPkt[13] << 8 ' bytes 12-13
@@ -659,7 +659,7 @@ PUB PARSE_UBLOX_PACKET :retVal | i
       utchour   := timeutcPkt[16]
       utcmin    := timeutcPkt[17]
       utcsec    := timeutcPkt[18]
-      utcValid  := timegpsPkt[19]  ' validUTC | validDWKN | validTOW
+      utcValid  := timegpsPkt[19] & %111 ' validUTC | validWKN | validTOW
 
     NAVSVINFO :
 '      TOWmS     := SWAP_BYTES_LONG(@svinfoPkt, 0)
@@ -714,7 +714,6 @@ PUB GPS_TIME_VALID ' Valid_leap_seconds | valid_week_number | valid_time_of_week
   return gpsValid
   
 PUB UTC_TIME_VALID
-
   return utcValid
 '  if (utcValid & %0100) == %0100
 '    return TRUE

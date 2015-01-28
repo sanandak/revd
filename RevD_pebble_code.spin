@@ -206,7 +206,7 @@ OBJ
   UARTS     : "FullDuplexSerial4portPlus_0v3"       '1 COG for 3 serial ports
   NUM       : "Numbers"                             'Include Numbers object for writing numbers to debuginal
   UBX       : "ubloxInterface2"
-  PEBBLE    : "BasicPebbleFunctionsStomp"                ' I put these into a seperate file to make editing easier
+  PEBBLE    : "BasicPebbleFunctions"                ' I put these into a seperate file to make editing easier
 
 VAR
   byte mainCogId, serialCogId, adcCogId, slaveCogId
