@@ -1,6 +1,6 @@
 '**************************************************************
 '* RevD_pebble_code.spin
-'* Main and top level program for operating the RevD board.
+'* Main and top level program for operating the RevC board.
 '*   built using the different test codes developed for RevC
 '*
 '* PGB
@@ -11,9 +11,8 @@
 '*                   new version of that is called BasicPebbleFunctionsStomp
 '*                   once it's all updated and working things can be moved
 '*                   back to simpler names.  I just want to be sure to keep
-'*                   a working copy.
-'* 26 Jan 2014    - version from WAIS.  Added LINE_TWO write
-'*   
+'*                   a working copy.  
+'*
 '**************************************************************
 CON ' Clock mode settings
   _CLKMODE = XTAL1 + PLL16X
@@ -207,7 +206,7 @@ OBJ
   UARTS     : "FullDuplexSerial4portPlus_0v3"       '1 COG for 3 serial ports
   NUM       : "Numbers"                             'Include Numbers object for writing numbers to debuginal
   UBX       : "ubloxInterface2"
-  PEBBLE    : "BasicPebbleFunctions"                ' I put these into a seperate file to make editing easier
+  PEBBLE    : "BasicPebbleFunctionsStomp"                ' I put these into a seperate file to make editing easier
 
 VAR
   byte mainCogId, serialCogId, adcCogId, slaveCogId
