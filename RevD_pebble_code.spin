@@ -257,46 +257,20 @@ PUB MAIN | idx, response, displayTime, pressType, flag, oldPhsa
   PEBBLE.INIT
   PEBBLE.GUMSTIX_ON             ' turn on gumstix so we can have a chance to program it. It will stay awake until we get GPS lock. 
   LAUNCH_SERIAL_COG             ' handle the 2 serial ports- debug and GPS
-  DIRA[WAKEUP] := 1             ' this is a testing pin so use it.
 
-  UARTS.PUTC(DEBUG, 16)
-  UARTS.PUTC(DEBUG, 1)
-  UARTS.STR(DEBUG, string(13, "Freecogs: "))
-  UARTS.STR(DEBUG, cogs.freestring)
-
-
+  DIRA[WAKEUP] := 0             ' using wakeup as a way to interrupt state machine.  
+    
   UARTS.STR(DEBUG, string(13, "$PSMSG, mainCogId: "))
   UARTS.DEC(DEBUG, mainCogId)
+
   UARTS.STR(DEBUG, string(13, "$PSMSG, serialCogId: "))
   UARTS.DEC(DEBUG, serialCogId)
+
   START_WATCHDOG(10_000)
   PAUSE_MS(2_000)
-  UARTS.STR(DEBUG, string(13, "Watchdog started in cog: "))
+  UARTS.STR(DEBUG, string(13, "$PSMSG, watchDogCogId: "))
   UARTS.DEC(DEBUG, watchDogCogId)
 
-  UARTS.PUTC(DEBUG, 16)
-  UARTS.PUTC(DEBUG, 1)
-  UARTS.STR(DEBUG, string(13, "Freecogs: "))
-  UARTS.STR(DEBUG, cogs.freestring)
-  
- 'testing watchdog
-{  repeat
-    PET_WATCHDOG
-    PAUSE_MS(1_000)
-'    repeat while  INA[REED_SWITCH] == 0      ' stay here while buttong is pressed
-'      PAUSE_MS(100)
-    UARTS.STR(DEBUG, string(13, "Just waiting around: "))
-    UARTS.DEC(DEBUG, idx++)
-    if idx == 12
-      UARTS.STR(DEBUG, string(13, "Time for reboot."))
-      PAUSE_MS(1000)
-      REBOOT
-}     
-                                         
-
-  'PEBBLE.GUMSTIX_ON
-  'repeat
-  '  waitcnt(0)
     
   PEBBLE.LED1_ON
   PEBBLE.OLED_ON
@@ -360,15 +334,15 @@ PUB MAIN | idx, response, displayTime, pressType, flag, oldPhsa
 '  mainState := ACQUISITION_MODE
 
   repeat
-    PET_WATCHDOG               ' do this every time through the loop.  
+    PET_WATCHDOG               ' do this every time through the loop.
+
+    repeat                      ' sit here while WAKEUP is held high
+      PAUSE_MS(10)              ' this is a way to interrupt the state machine
+    while INA[WAKEUP] == 1      ' and check the functionality of the watchdog timer code
+     
     case mainState
       SLEEP             :
         UARTS.STR(DEBUG, string(13, "$PSMSG. Sleeping system.  Use magnet to wake or wait for trigger."))
-        UARTS.DEC(DEBUG, mainCogId)
-        UARTS.PUTC(DEBUG, SPACE)
-        UARTS.DEC(DEBUG, watchdogCogId)
-        UARTS.PUTC(DEBUG, SPACE)
-        UARTS.DEC(DEBUG, serialCogId)
         repeat 3   ' why is this hear?
           UARTS.STR(DEBUG, string(13, "$PSMSG. SHUTDOWN"))
         PEBBLE.OLED_WRITE_LINE1(@sleepMsg)
@@ -376,10 +350,8 @@ PUB MAIN | idx, response, displayTime, pressType, flag, oldPhsa
         repeat 3
           UARTS.PUTC(DEBUG,CR)
         PAUSE_MS(5000)          ' display messages for a moment before going to sleep
-        PEBBLE.SLEEP_3(mainCogId, watchDogCogId, serialCogId)
+        PEBBLE.SLEEP_3(mainCogId, watchDogCogId)
         PAUSE_MS(200)
-        UARTS.STR(DEBUG, string(13, "Freecogs: "))
-        UARTS.STR(DEBUG, cogs.freestring)
   
         mainState := WAIT_FOR_WAKE_UP
         PHSA := 0               ' clear before moving to new state
@@ -398,7 +370,7 @@ PUB MAIN | idx, response, displayTime, pressType, flag, oldPhsa
         'OUTA[WAKEUP] := 0
 
       ACQUISITION_MODE  :
-        OUTA[WAKEUP] := 1
+        'OUTA[WAKEUP] := 1
 
         DO_SOMETHING_USEFUL
 
@@ -417,7 +389,7 @@ PUB MAIN | idx, response, displayTime, pressType, flag, oldPhsa
           PHSA := 0               ' clear before moving to new state
           mainState := SLEEP
 
-        OUTA[WAKEUP] := 0
+        'OUTA[WAKEUP] := 0
 
 {      SHUTDOWN          :
         UARTS.STR(DEBUG, string(13, "$PSMSG, Sleeping System at:"))
@@ -429,6 +401,17 @@ PUB MAIN | idx, response, displayTime, pressType, flag, oldPhsa
         FLAG := FALSE
         mainState := SLEEP
 }
+
+PUB FREE_COGS | idx, response
+  response := cogs.freestring
+  repeat idx from 0 to 7
+    if byte[response][idx] => "0" AND byte[response][idx] =< "7"
+      OUTA[WAKEUP] := 1
+    PAUSE_MS(5)
+    OUTA[WAKEUP] := 0
+    PAUSE_MS(5)
+
+  OUTA[WAKEUP] := 1
 
 PUB START_WATCHDOG(timeout)
 '' method that starts a new watchdog timer in unique cog
@@ -474,13 +457,11 @@ PUB WATCHDOG(timeout) | timeSincePet, t
 
     t := watchDogTimer
     timeSincePet := (CNT - t) / (clkfreq / 1000)              ' how many MS since last pet?
-'    UARTS.STR(DEBUG, string(13, "time: "))
-'    UARTS.DEC(DEBUG, timeSincePet)
-'    UARTS.STR(DEBUG, string(" watch: "))
-'    UARTS.DEC(DEBUG, t)
 
     ' Check for watchdog timeout
     if timeSincePet > timeout
+      UARTS.PUTC(DEBUG, CLEAR)
+      UARTS.PUTC(DEBUG,  HOME)
       UARTS.STR(DEBUG, string(13,13, "$PSMSG. WATCHDOG REBOOT!"))
       PAUSE_MS(2_000)
       REBOOT
@@ -502,9 +483,15 @@ PUB WATCHDOG(timeout) | timeSincePet, t
       PHSA := 0                 ' init PHSA for software reboot timing
             
         if ( PHSA > REBOOT_TIMEOUT_MS )        ' Has button been pressed longer than PROGRAM_TIMEOUT_MS?  
+          UARTS.PUTC(DEBUG, CLEAR)
+          UARTS.PUTC(DEBUG,  HOME)
           UARTS.STR(DEBUG, string(13,13, "SOFTWARE REBOOT! PHSA: "))
           UARTS.DEC(DEBUG, PHSA)
-          PAUSE_MS(2_000)
+          repeat 50
+            PEBBLE.LEDS_ON
+            PAUSE_MS(100)
+            PEBBLE.LEDS_OFF
+            PAUSE_MS(100)
           REBOOT
 
 
