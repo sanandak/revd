@@ -351,20 +351,20 @@ PUB SET_EXP2_VAL(newValue)
   EXPANDER_WRITE(EXPANDER_2, expVal2)
   return expVal2
 }  
-PUB SLEEP(mainCogId) | i
+PUB SLEEP(mainCogId, watchDogCogId) | i
 
 ' Turn off everything we can
   SET_EXPANDER_TO_LOW_POWER
 
 ' shutdown all other cogs
   repeat i from 0 to 7
-    if i <> mainCogId
+    if i <> mainCogId  AND i <> watchDogCogId
       cogstop(i)
 
 ' switch clock to XTAL1 with no PLL to save power
   _slow_prop
 
-PUB SLEEP_2(mainCogId) | i
+PUB SLEEP_2(mainCogId, watchDogCogId) | i
 
 ' Turn off most stuff but leave the gumstix powered.  Use ONLY after sending shutdown message
 ' to gumstix; this keeps the gumstix powered but it's not on.  This power will help keep the
@@ -373,24 +373,24 @@ PUB SLEEP_2(mainCogId) | i
 
 ' shutdown all other cogs
   repeat i from 0 to 7
-    if i <> mainCogId
+    if i <> mainCogId  AND i <> watchDogCogId
       cogstop(i)
 
 ' switch clock to XTAL1 with no PLL to save power
   _slow_prop
 
-PUB SLEEP_3(mainCogId) | i
+PUB SLEEP_3(mainCogId, watchDogCogId) | i
 ' this version of sleep kills the gumstix but leaves the GPS on all the time.
 ' hopefully this will solve the problem of the bad backup battery
 
   SLEEP_ALL_BUT_GPS
 ' shutdown all other cogs
   repeat i from 0 to 7
-    if i <> mainCogId
+    if i <> mainCogId  AND i <> watchDogCogId
       cogstop(i)
 
 ' switch clock to XTAL1 with no PLL to save power
-  _slow_prop
+'  _slow_prop
 
 PUB SLEEP_ALL_BUT_GPS
 ' this differes from SET_EXPANDER_TO_LOW_POWER because this does not turn off the GUMSTIX
@@ -1208,12 +1208,12 @@ PUB SWITCHED_ON(interval)
 
 ' has there been a button press?
   if INA[REED_SWITCH] == NOT_PRESSED   ' we can't make a decision until the button is no longer pressed
-    waitcnt( cnt+625_000 )             ' debounce for .1 sec
+    PAUSE_MS(100)
     if INA[REED_SWITCH] == NOT_PRESSED ' if switch is STILL not pressed
       case PHSA
-        1_562_500..6_250_000     : ' button pressed for .25-1 sec
+        clkfreq>>2..clkfreq     : ' button pressed for .25-1 sec
            return 2
-        31_250_000..62_500_000 : ' button pressed for 5-10 sec
+        clkfreq<<2..clkfreq<<3  : ' button pressed for 4-8 sec
            return 3
       
   return -1              ' otherwise it's not time to wake up so don't

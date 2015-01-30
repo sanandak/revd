@@ -1,6 +1,6 @@
 '**************************************************************
 '* RevD_pebble_code.spin
-'* Main and top level program for operating the RevD board.
+'* Main and top level program for operating the RevC board.
 '*   built using the different test codes developed for RevC
 '*
 '* PGB
@@ -11,8 +11,7 @@
 '*                   new version of that is called BasicPebbleFunctionsStomp
 '*                   once it's all updated and working things can be moved
 '*                   back to simpler names.  I just want to be sure to keep
-'*                   a working copy.
-'* 26 Jan 2014    - version from WAIS.  Added LINE_TWO write
+'*                   a working copy.  
 '*
 '**************************************************************
 CON ' Clock mode settings
@@ -158,16 +157,17 @@ CON ' UART ports and pin numbers - DEBUG, GPS, MSP
   GPS_BAUD          =   9600
 
   UART_SIZE         =    100
+  CR                =     13
   SPACE             =     32
   TAB               =      9
   COLON             =     58
   COMMA             =     44
+  CLEAR             =     16  ''CS: Clear Screen      
+  HOME              =      1  ''HM: HoMe cursor       
   MAX_COMMANDS      =     10
   
   DEBUG_RX_FROM     = 31
   DEBUG_TX_TO       = 30
-  CL = 16  ''CS: Clear Screen
-  CR = 13  ''CR: Carriage Return      
 
 CON ' main state machine states
   #0, SLEEP, WAIT_FOR_WAKE_UP, CHANGE_ACQ_SETTINGS, ACQUISITION_MODE, SHUTDOWN
@@ -189,7 +189,11 @@ CON ' EEPROM constants
   SOURCE_C_ADDRESS = EEPROM_BASE + 32
   SOURCE_D_ADDRESS = EEPROM_BASE + 36
 
-    
+CON ' watchdog constants
+  WATCH_DOG_TIMEOUT_MS =  2_000
+  PROGRAM_TIMEOUT_MS   = 10_000
+  REBOOT_TIMEOUT_MS    =  2_000
+  
 DAT ' oled messages
   blankMsg   byte   "                ", 0
   oled1Msg   byte   "                ", 0
@@ -208,9 +212,10 @@ OBJ
   NUM       : "Numbers"                             'Include Numbers object for writing numbers to debuginal
   UBX       : "ubloxInterface2"
   PEBBLE    : "BasicPebbleFunctions"                ' I put these into a seperate file to make editing easier
-
+  COGS      : "sparecogs"
+  
 VAR
-  byte mainCogId, serialCogId, adcCogId, slaveCogId
+  byte mainCogId, serialCogId, adcCogId, slaveCogId, watchDogCogId
   byte clockSetYet, acqOn, lockType, oldDay
   byte mainState, edgeDetector
   byte inUartBuf[UART_SIZE], inUartIdx, ptrIdx, uartState, inUartPtr[MAX_COMMANDS]
@@ -219,6 +224,8 @@ VAR
   word dacValue
   word rtcYear, rtcMonth, rtcDay, rtcDow, rtcHour, rtcMinute, rtcSecond
   word year, month, day, hour, minute, second, utcValid, gpsValid, fixStat
+          
+  long watchDogTimer, watchDogStack[16]
   ' ubxBufferAddress is the HUB memory location of gps data stored by ubx object
   long ubxBufferAddress, gpsHeader, oldRecLen
   long sampleRate, gainA, gainB, gainC, gainD, sourceA, sourceB, sourceC, sourceD, interval, recordLength ' these are longs because that's how they are stored in the EEPROM
@@ -239,22 +246,31 @@ PUB MAIN | idx, response, displayTime, pressType, flag, oldPhsa
 ' the main method here is a simple state machine
 ' Wednesday morning in Meadville
 
-  adcCogId    := -1
-  slaveCogId  := -1
-  serialCogId := -1
-  oldDay      := -1
-  mainCogId   := cogid
-  acqon       := FALSE
+  adcCogId      := -1
+  slaveCogId    := -1
+  serialCogId   := -1
+  oldDay        := -1
+  watchDogCogId := -1
+  mainCogId     := cogid
+  acqon         := FALSE
 
   PEBBLE.INIT
   PEBBLE.GUMSTIX_ON             ' turn on gumstix so we can have a chance to program it. It will stay awake until we get GPS lock. 
   LAUNCH_SERIAL_COG             ' handle the 2 serial ports- debug and GPS
-  DIRA[WAKEUP] := 1             ' this is a testing pin so use it.
 
+  DIRA[WAKEUP] := 0             ' using wakeup as a way to interrupt state machine.  
+    
+  UARTS.STR(DEBUG, string(13, "$PSMSG, mainCogId: "))
+  UARTS.DEC(DEBUG, mainCogId)
 
-  'PEBBLE.GUMSTIX_ON
-  'repeat
-  '  waitcnt(0)
+  UARTS.STR(DEBUG, string(13, "$PSMSG, serialCogId: "))
+  UARTS.DEC(DEBUG, serialCogId)
+
+  START_WATCHDOG(10_000)
+  PAUSE_MS(2_000)
+  UARTS.STR(DEBUG, string(13, "$PSMSG, watchDogCogId: "))
+  UARTS.DEC(DEBUG, watchDogCogId)
+
     
   PEBBLE.LED1_ON
   PEBBLE.OLED_ON
@@ -264,18 +280,25 @@ PUB MAIN | idx, response, displayTime, pressType, flag, oldPhsa
   displayTime := cnt+clkFreq<<1
   UARTS.STR(DEBUG, string(13, "$PSMSG, Booting geoPebble: "))
   waitcnt(displayTime += clkfreq<<1)
+  PET_WATCHDOG
+
   TURN_ON_GPS
   waitcnt(displayTime += clkfreq<<1)
   GET_AND_PRINT_PARAMETERS
+  PET_WATCHDOG
+
   waitcnt(displayTime += clkfreq<<1)
   PRINT_EUI
+  PET_WATCHDOG
+
   waitcnt(displayTime += clkfreq<<1)
   PEBBLE.OLED_WRITE_LINE1(@versionMsg)
+  PET_WATCHDOG
+
   waitcnt(displayTime += clkfreq<<1)
 
   clockSetYet := FALSE          ' when we first boot we have no idea what the lock status is/was
   PEBBLE.OLED_WRITE_LINE1(string("Getting GPS Lock"))
-  waitcnt(displayTime += clkfreq<<1)
   
 ' setup counter B in this cog to track the number of system counts between
 ' the rising GPS and when we get over to read it.
@@ -291,6 +314,7 @@ PUB MAIN | idx, response, displayTime, pressType, flag, oldPhsa
   UPDATE_TIME_AND_DATE
   PRINT_TIME_AND_DATE
   PAUSE_MS(2000)
+
 ' setup counter A in this cog to track times when the "button" is "pressed"
 ' this is used to sleep and wake the system
   CTRA := %10101 << 26 + REED_SWITCH    ' counter A in LOGIC !A mode
@@ -310,18 +334,25 @@ PUB MAIN | idx, response, displayTime, pressType, flag, oldPhsa
 '  mainState := ACQUISITION_MODE
 
   repeat
-    if PHSA > REBOOT_TIME  ' has button been pressed for more than 20 (when running at 100Mhz) seconds?
-      REBOOT_SYSTEM
-                              
+    PET_WATCHDOG               ' do this every time through the loop.
+
+    repeat                      ' sit here while WAKEUP is held high
+      PAUSE_MS(10)              ' this is a way to interrupt the state machine
+    while INA[WAKEUP] == 1      ' and check the functionality of the watchdog timer code
+     
     case mainState
       SLEEP             :
-        UARTS.STR(DEBUG, string(13, "$PSMSG. Sleeping system.  Use magnet to wake or wait for trigger.", 13, 13))
-        repeat 3
+        UARTS.STR(DEBUG, string(13, "$PSMSG. Sleeping system.  Use magnet to wake or wait for trigger."))
+        repeat 3   ' why is this hear?
           UARTS.STR(DEBUG, string(13, "$PSMSG. SHUTDOWN"))
         PEBBLE.OLED_WRITE_LINE1(@sleepMsg)
         PEBBLE.OLED_WRITE_LINE2(@magnetMsg)
+        repeat 3
+          UARTS.PUTC(DEBUG,CR)
         PAUSE_MS(5000)          ' display messages for a moment before going to sleep
-        PEBBLE.SLEEP_3(cogId)
+        PEBBLE.SLEEP_3(mainCogId, watchDogCogId)
+        PAUSE_MS(200)
+  
         mainState := WAIT_FOR_WAKE_UP
         PHSA := 0               ' clear before moving to new state
         FLAG := FALSE           ' anytime we sleep clear flag
@@ -339,7 +370,7 @@ PUB MAIN | idx, response, displayTime, pressType, flag, oldPhsa
         'OUTA[WAKEUP] := 0
 
       ACQUISITION_MODE  :
-        OUTA[WAKEUP] := 1
+        'OUTA[WAKEUP] := 1
 
         DO_SOMETHING_USEFUL
 
@@ -358,7 +389,7 @@ PUB MAIN | idx, response, displayTime, pressType, flag, oldPhsa
           PHSA := 0               ' clear before moving to new state
           mainState := SLEEP
 
-        OUTA[WAKEUP] := 0
+        'OUTA[WAKEUP] := 0
 
 {      SHUTDOWN          :
         UARTS.STR(DEBUG, string(13, "$PSMSG, Sleeping System at:"))
@@ -371,6 +402,108 @@ PUB MAIN | idx, response, displayTime, pressType, flag, oldPhsa
         mainState := SLEEP
 }
 
+PUB FREE_COGS | idx, response
+  response := cogs.freestring
+  repeat idx from 0 to 7
+    if byte[response][idx] => "0" AND byte[response][idx] =< "7"
+      OUTA[WAKEUP] := 1
+    PAUSE_MS(5)
+    OUTA[WAKEUP] := 0
+    PAUSE_MS(5)
+
+  OUTA[WAKEUP] := 1
+
+PUB START_WATCHDOG(timeout)
+'' method that starts a new watchdog timer in unique cog
+' first stop any existing watchdog cogs then start the watchdog
+  STOP_WATCHDOG
+  watchDogCogId := cognew(WATCHDOG(timeout), @watchDogStack)
+    
+PUB WATCHDOG(timeout) | timeSincePet, t
+'' Watchdog function.  Should be started in its own cog.
+'' This watchdog does 3 things.
+'' 1.  it watches a shared memory location (single LONG in HUB).  If that location
+''     isn't updated evert WATCH_DOG_TIMEOUT_MS this cog will reboot the prop.
+'' 2.  watches the reed switch/button to see if it has been pressed for more
+''     than PROGRAM_TIMEOUT_MS.  If the button HAS been pressed longer than this
+''     it turns on the gumstix allowing the prop to be programmed.
+'' 3.  watches the reed switch/buttong to see if it has been pressed for more
+''     than REBOOT_TIMEOUT_MS.  If the button HAS been pressed longer than this
+''     it reboots the prop.  
+
+'  UARTS.STR(DEBUG, string(13, "Program time: "))
+'  UARTS.HEX(DEBUG, clkfreq/1000 * PROGRAM_TIMEOUT_MS,8)
+'  UARTS.PUTC(DEBUG, TAB)
+'  UARTS.DEC(DEBUG, clkfreq/1000 * PROGRAM_TIMEOUT_MS)
+
+'  UARTS.STR(DEBUG, string(13, "Reboot time: "))
+'  UARTS.HEX(DEBUG, clkfreq/1000 * REBOOT_TIMEOUT_MS,8)
+'  UARTS.PUTC(DEBUG, TAB)
+'  UARTS.DEC(DEBUG, clkfreq/1000 * REBOOT_TIMEOUT_MS)
+
+' setup counter A in this cog to track times when the "button" is "pressed"
+' this is used to sleep and wake the system
+  CTRA := %10101 << 26 + REED_SWITCH    ' counter A in LOGIC !A mode
+  FRQA := 1                             ' increment phsa once for every clock cycle that REED_SWITCH is PRESSED
+  PHSA := 0
+  
+  watchDogTimer := CNT          ' init time so we don't reboot right away
+
+  repeat
+    if INA[REED_SWITCH] == PEBBLE#NOT_PRESSED
+      PHSA := 0            ' if button is not pressed clear out PHSA A
+
+    PAUSE_MS(10)               ' spend some time sleeping
+
+    t := watchDogTimer
+    timeSincePet := (CNT - t) / (clkfreq / 1000)              ' how many MS since last pet?
+
+    ' Check for watchdog timeout
+    if timeSincePet > timeout
+      UARTS.PUTC(DEBUG, CLEAR)
+      UARTS.PUTC(DEBUG,  HOME)
+      UARTS.STR(DEBUG, string(13,13, "$PSMSG. WATCHDOG REBOOT!"))
+      PAUSE_MS(2_000)
+      REBOOT
+
+    ' Check for button presses 
+    if ( PHSA > (clkfreq/1000 * PROGRAM_TIMEOUT_MS) )        ' Has button been pressed longer than PROGRAM_TIMEOUT_MS?  
+      UARTS.PUTC(DEBUG, CLEAR)
+      UARTS.PUTC(DEBUG,  HOME)
+      UARTS.STR(DEBUG, string(13, "$PSMSG.  Entering programming mode. PHSA: "))
+      UARTS.DEC(DEBUG, PHSA)
+      PEBBLE.GUMSTIX_ON         ' should other stuff be turned off first?
+      repeat
+        PEBBLE.LEDS_ON
+        PAUSE_MS(250)
+        PEBBLE.LEDS_OFF
+        PAUSE_MS(250)
+      until INA[REED_SWITCH] == PEBBLE#NOT_PRESSED
+
+      PHSA := 0                 ' init PHSA for software reboot timing
+            
+        if ( PHSA > REBOOT_TIMEOUT_MS )        ' Has button been pressed longer than PROGRAM_TIMEOUT_MS?  
+          UARTS.PUTC(DEBUG, CLEAR)
+          UARTS.PUTC(DEBUG,  HOME)
+          UARTS.STR(DEBUG, string(13,13, "SOFTWARE REBOOT! PHSA: "))
+          UARTS.DEC(DEBUG, PHSA)
+          repeat 50
+            PEBBLE.LEDS_ON
+            PAUSE_MS(100)
+            PEBBLE.LEDS_OFF
+            PAUSE_MS(100)
+          REBOOT
+
+
+PUB PET_WATCHDOG
+  watchDogTimer := CNT   ' pet the watchdog                       
+
+PUB STOP_WATCHDOG
+' if the watchdog cog has been started, stop it.
+  if watchDogCogId <> -1
+    cogstop(watchDogCogId)
+
+  watchDogCogId := -1  
 
 PUB COME_OUT_OF_SLEEP(pressType)
   PEBBLE.WAKE_UP
@@ -936,7 +1069,8 @@ PUB PROCESS_UART | idx, pkpA, pkpB, pkpC, cursor
         PEBBLE.OLED_DATA(cursor)
     LINE_TWO :        '2
         inUartBuf[2+16] := 0                    ' make sure that we have a zero-terminated string that won't exceed OLED length
-        PEBBLE.OLED_WRITE_LINE2(@inUartBuf[inUartPtr[1]])' maybe we don't need the @ symbol?  
+        PEBBLE.OLED_WRITE_LINE2(string("                "))  ' clear the line before writing to it.
+        PEBBLE.OLED_WRITE_LINE2(@inUartBuf[inUartPtr[1]])    ' print the message  
                                                '  
       'UARTS.STR(DEBUG, string(" Write to OLED: "))
       'UARTS.STR(DEBUG, @inUartBuf[2])
@@ -1093,7 +1227,8 @@ PUB STOP_ADC_COG
 PUB GET_GPS_LOCK | idx, response
   idx := 0
 
-  repeat 
+  repeat
+    PET_WATCHDOG                 ' pet the watchdog
     edgeDetector := ((edgeDetector << 1) | INA[GPS_PPS] ) & %11    
     case edgeDetector 
       %01 : ' rising edge -> grab phsb
