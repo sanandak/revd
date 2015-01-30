@@ -375,7 +375,7 @@ PUB MAIN | idx, response, displayTime, pressType, flag, oldPhsa
         DO_SOMETHING_USEFUL
 
         ' now check to see if we should sleep or not
-        if ( (PHSA > (clkfreq *5)) )        ' was it pressed for more than 5 seconds?  
+        if ( (PHSA > (clkfreq * 5)) )        ' was it pressed for more than 5 seconds?  
           UARTS.STR(DEBUG, string(13, "Sleep case: button pressed: "))
           UARTS.DEC(DEBUG, PHSA)
           recordLength := 10

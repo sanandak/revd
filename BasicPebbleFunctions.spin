@@ -1194,7 +1194,8 @@ PUB WAIT_FOR_TIME(modValue)
   OLED_WRITE_LINE1(string("Waking System."))
 
 PUB SWITCHED_ON(interval) 
-{  if INA[REED_SWITCH] == 0      ' is button "pressed"?
+{
+  if INA[REED_SWITCH] == 0      ' is button "pressed"?
     waitcnt(clkfreq/1000 + cnt) ' wait for 1/10s debounce
     if INA[REED_SWITCH] == 0    ' is button still "pressed"
       return TRUE               ' if button is pressed return immediately
