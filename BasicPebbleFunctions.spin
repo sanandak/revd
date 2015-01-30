@@ -351,20 +351,20 @@ PUB SET_EXP2_VAL(newValue)
   EXPANDER_WRITE(EXPANDER_2, expVal2)
   return expVal2
 }  
-PUB SLEEP(mainCogId) | i
+PUB SLEEP(mainCogId, watchDogCogId) | i
 
 ' Turn off everything we can
   SET_EXPANDER_TO_LOW_POWER
 
 ' shutdown all other cogs
   repeat i from 0 to 7
-    if i <> mainCogId
+    if i <> mainCogId  AND i <> watchDogCogId
       cogstop(i)
 
 ' switch clock to XTAL1 with no PLL to save power
   _slow_prop
 
-PUB SLEEP_2(mainCogId) | i
+PUB SLEEP_2(mainCogId, watchDogCogId) | i
 
 ' Turn off most stuff but leave the gumstix powered.  Use ONLY after sending shutdown message
 ' to gumstix; this keeps the gumstix powered but it's not on.  This power will help keep the
@@ -373,24 +373,24 @@ PUB SLEEP_2(mainCogId) | i
 
 ' shutdown all other cogs
   repeat i from 0 to 7
-    if i <> mainCogId
+    if i <> mainCogId  AND i <> watchDogCogId
       cogstop(i)
 
 ' switch clock to XTAL1 with no PLL to save power
   _slow_prop
 
-PUB SLEEP_3(mainCogId) | i
+PUB SLEEP_3(mainCogId, watchDogCogId, serialCogId) | i
 ' this version of sleep kills the gumstix but leaves the GPS on all the time.
 ' hopefully this will solve the problem of the bad backup battery
 
   SLEEP_ALL_BUT_GPS
 ' shutdown all other cogs
   repeat i from 0 to 7
-    if i <> mainCogId
+    if i <> mainCogId  AND i <> watchDogCogId AND i <> serialCogId
       cogstop(i)
 
 ' switch clock to XTAL1 with no PLL to save power
-  _slow_prop
+'  _slow_prop
 
 PUB SLEEP_ALL_BUT_GPS
 ' this differes from SET_EXPANDER_TO_LOW_POWER because this does not turn off the GUMSTIX
