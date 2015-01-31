@@ -1,3 +1,6 @@
-# revd
-revd pebble code
-used for WAIS Divide season
+#geopebble rev D Code
+
+[propeller](http://www.parallax.com) spin and pasm code to control the logic board.
+
+##
+ 
