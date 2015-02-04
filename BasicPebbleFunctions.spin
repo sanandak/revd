@@ -890,8 +890,8 @@ PUB READ_RTC_SRAM | idx
   
   return @rtcSram
 
-PUB WRITE_RTC_SRAM(parmsPtr) | idx
-  bytemove(@rtcSram, parmsPtr, 64)       ' copy the parameters to local storage
+PUB WRITE_RTC_SRAM(sramPtr) | idx
+  bytemove(@rtcSram, sramPtr, 64)       ' copy the parameters to local storage
   
   I2C.START
   I2C.WRITE(RTC_ADDR|I2C_WRITE)

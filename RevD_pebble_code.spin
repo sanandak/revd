@@ -267,8 +267,6 @@ PUB MAIN | idx, response, displayTime, pressType, flag, oldPhsa
   PEBBLE.GUMSTIX_ON             ' turn on gumstix so we can have a chance to program it. It will stay awake until we get GPS lock. 
   LAUNCH_SERIAL_COG             ' handle the 2 serial ports- debug and GPS
 
-  DIRA[WAKEUP] := 0             ' using wakeup as a way to interrupt state machine.  
-    
   UARTS.PUTC(DEBUG, 16)
   UARTS.STR(DEBUG, string(13, "$PSMSG, Welcome aboard.  Booting system."))
   UARTS.STR(DEBUG, string(13, "$PSMSG, mainCogId: "))
@@ -276,11 +274,6 @@ PUB MAIN | idx, response, displayTime, pressType, flag, oldPhsa
 
   UARTS.STR(DEBUG, string(13, "$PSMSG, serialCogId: "))
   UARTS.DEC(DEBUG, serialCogId)
-  
-  'test SRAM storage
-  'WRITE_DEFAULT_PARAMS_TO_SRAM
-  'GET_AND_PRINT_PARAMETERS
-
 
   START_WATCHDOG
   PAUSE_MS(2_000)
@@ -1128,9 +1121,12 @@ PUB READ_RTC_TIME
   UARTS.PUTC(DEBUG, SPACE)
 }
 
-PUB GET_PARAMETERS_FROM_SRAM
+PUB GET_PARAMETERS_FROM_SRAM | response 
 ' can't currently store parameters in EEPROM so we set them to be this everytime.
-  bytemove(@sramParms, PEBBLE.READ_RTC_SRAM, 64)
+  'test SRAM storage
+  response := PEBBLE.READ_RTC_SRAM
+  bytemove(@sramParms, response, 64)
+
   if sramParms[0] == "G" AND sramParms[1] == "P" ' look to see if these data are valid
     UARTS.STR(DEBUG, string(13,"Parameters loaded from SRAM. "))
     UARTS.STR(DEBUG, @euiMsg[4])
@@ -1159,6 +1155,8 @@ PUB GET_PARAMETERS_FROM_SRAM
     sourceD    :=  INTERNAL 'PEBBLE.READ_EEPROM_LONG(SOURCE_D_ADDRESS)
     interval   :=  2        '
     recordLength := 10     ' number of seconds to record
+    STORE_PARAMETERS_TO_SRAM
+    UARTS.STR(DEBUG, string(13,"Wrote new parameters to SRAM."))
 
 PUB STORE_PARAMETERS_TO_EEPROM
   PEBBLE.WRITE_EEPROM_LONG(SPS_ADDRESS, sampleRate)
@@ -1188,7 +1186,8 @@ PUB STORE_PARAMETERS_TO_SRAM
   sramParms[11] := sourceD
   sramParms[12] := interval
   sramParms[13] := recordLength
-  bytemove(@sramParms, PEBBLE.READ_RTC_SRAM, 64)
+
+  PEBBLE.WRITE_RTC_SRAM(@sramParms)
   
 PUB CHECK_DEFAULT_PARAMS | eepromValue
 
