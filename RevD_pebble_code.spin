@@ -995,7 +995,7 @@ PUB PROCESS_UART | idx, pkpA, pkpB, pkpC, cursor
       UARTS.DEC(DEBUG, slaveCogId)
       cogStop(adcCogId)
       cogStop(slaveCogId)
-      'STORE_PARAMETERS_TO_EEPROM
+      STORE_PARAMETERS_TO_SRAM
       START_ACQUISITION
 
     QUERY :                ' Q
@@ -1020,7 +1020,7 @@ PUB PROCESS_UART | idx, pkpA, pkpB, pkpC, cursor
       UARTS.DEC(DEBUG, slaveCogId)
       cogStop(adcCogId)
       cogStop(slaveCogId)
-      STORE_PARAMETERS_TO_EEPROM
+      STORE_PARAMETERS_TO_SRAM
       START_ACQUISITION
       
     SOURCE :               'O                                     
@@ -1042,7 +1042,7 @@ PUB PROCESS_UART | idx, pkpA, pkpB, pkpC, cursor
       UARTS.DEC(DEBUG, slaveCogId)
       cogStop(adcCogId)
       cogStop(slaveCogId)
-      STORE_PARAMETERS_TO_EEPROM
+      STORE_PARAMETERS_TO_SRAM
       START_ACQUISITION
 
     STOMP_DATA :        'W
@@ -1158,19 +1158,7 @@ PUB GET_PARAMETERS_FROM_SRAM | response
     STORE_PARAMETERS_TO_SRAM
     UARTS.STR(DEBUG, string(13,"Wrote new parameters to SRAM."))
 
-PUB STORE_PARAMETERS_TO_EEPROM
-  PEBBLE.WRITE_EEPROM_LONG(SPS_ADDRESS, sampleRate)
-  PEBBLE.WRITE_EEPROM_LONG(GAIN_A_ADDRESS, gainA)
-  PEBBLE.WRITE_EEPROM_LONG(GAIN_B_ADDRESS, gainB)
-  PEBBLE.WRITE_EEPROM_LONG(GAIN_C_ADDRESS, gainC)
-  PEBBLE.WRITE_EEPROM_LONG(GAIN_D_ADDRESS, gainD)
-  PEBBLE.WRITE_EEPROM_LONG(SOURCE_A_ADDRESS, sourceA)
-  PEBBLE.WRITE_EEPROM_LONG(SOURCE_B_ADDRESS, sourceB)
-  PEBBLE.WRITE_EEPROM_LONG(SOURCE_C_ADDRESS, sourceC)
-  PEBBLE.WRITE_EEPROM_LONG(SOURCE_D_ADDRESS, sourceD)
-'  PEBBLE.WRITE_EEPROM_LONG(INTERVAL_ADDRESS, interval)  FIXME
-'  PEBBLE.WRITE_EEPROM_LONG(RECORD_ADDRESS, recordLength)  FIXME
-  
+
 PUB STORE_PARAMETERS_TO_SRAM
   sramParms[0] := "G"
   sramParms[1] := "P" ' look to see if these data are valid
@@ -1189,31 +1177,6 @@ PUB STORE_PARAMETERS_TO_SRAM
 
   PEBBLE.WRITE_RTC_SRAM(@sramParms)
   
-PUB CHECK_DEFAULT_PARAMS | eepromValue
-
-  eepromValue := PEBBLE.READ_EEPROM_LONG(GPB_ADDRESS)
-  if eepromValue == $DEAD_BEEF
-    UARTS.STR(DEBUG, string(13,"$PSMSG,Factory parameters already set."))
-  else
-    WRITE_DEFAULT_PARAMS_TO_EEPROM
-
-PUB WRITE_DEFAULT_PARAMS_TO_EEPROM
-  sampleRate := 1000
-  gainA      :=    1
-  gainB      :=    1
-  gainC      :=    1
-  gainD      :=   10
-  sourceA    := INTERNAL
-  sourceB    := INTERNAL
-  sourceC    := INTERNAL
-  sourceD    := INTERNAL
-  interval   := 2
-  recordLength := 10
-  STORE_PARAMETERS_TO_EEPROM
-  PEBBLE.WRITE_EEPROM_LONG(GPB_ADDRESS, $DEAD_BEEF)
-  UARTS.STR(DEBUG, string(13,"$PSMSG,Default paramaters stored to EEPROM."))
-  PEBBLE.OLED_WRITE_LINE1(string("WROTE TO EEPROM "))
-  PAUSE_MS(1500)
 
 PUB WRITE_DEFAULT_PARAMS_TO_SRAM
   sampleRate := 1000
@@ -1374,6 +1337,38 @@ PUB PAUSE_US(uS)
   waitcnt(clkfreq/1_000_000 * uS + cnt)
 
 PUB SPARE_PARTS
+{PUB WRITE_DEFAULT_PARAMS_TO_EEPROM
+  sampleRate := 1000
+  gainA      :=    1
+  gainB      :=    1
+  gainC      :=    1
+  gainD      :=   10
+  sourceA    := INTERNAL
+  sourceB    := INTERNAL
+  sourceC    := INTERNAL
+  sourceD    := INTERNAL
+  interval   := 2
+  recordLength := 10
+  STORE_PARAMETERS_TO_EEPROM
+  PEBBLE.WRITE_EEPROM_LONG(GPB_ADDRESS, $DEAD_BEEF)
+  UARTS.STR(DEBUG, string(13,"$PSMSG,Default paramaters stored to EEPROM."))
+  PEBBLE.OLED_WRITE_LINE1(string("WROTE TO EEPROM "))
+  PAUSE_MS(1500)
+}
+
+{PUB STORE_PARAMETERS_TO_EEPROM
+  PEBBLE.WRITE_EEPROM_LONG(SPS_ADDRESS, sampleRate)
+  PEBBLE.WRITE_EEPROM_LONG(GAIN_A_ADDRESS, gainA)
+  PEBBLE.WRITE_EEPROM_LONG(GAIN_B_ADDRESS, gainB)
+  PEBBLE.WRITE_EEPROM_LONG(GAIN_C_ADDRESS, gainC)
+  PEBBLE.WRITE_EEPROM_LONG(GAIN_D_ADDRESS, gainD)
+  PEBBLE.WRITE_EEPROM_LONG(SOURCE_A_ADDRESS, sourceA)
+  PEBBLE.WRITE_EEPROM_LONG(SOURCE_B_ADDRESS, sourceB)
+  PEBBLE.WRITE_EEPROM_LONG(SOURCE_C_ADDRESS, sourceC)
+  PEBBLE.WRITE_EEPROM_LONG(SOURCE_D_ADDRESS, sourceD)
+'  PEBBLE.WRITE_EEPROM_LONG(INTERVAL_ADDRESS, interval)  FIXME
+'  PEBBLE.WRITE_EEPROM_LONG(RECORD_ADDRESS, recordLength)  FIXME
+  }
 {        case PEBBLE.SWITCH_OFF(recordLength, second)
           0 :
             UARTS.STR(DEBUG, string(13, "Sleeping case: button pressed: "))
