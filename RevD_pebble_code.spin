@@ -189,10 +189,18 @@ CON ' EEPROM constants
   SOURCE_C_ADDRESS = EEPROM_BASE + 32
   SOURCE_D_ADDRESS = EEPROM_BASE + 36
 
-CON ' watchdog constants
-  WATCH_DOG_TIMEOUT_MS =  2_000
-  PROGRAM_TIMEOUT_MS   = 10_000
-  REBOOT_TIMEOUT_MS    =  2_000
+CON ' Reed Switch constants
+  WATCH_DOG_TIMEOUT_MS =    2_000       ' time in ms allowed to elapse before watchdog reboots system
+  PROGRAM_TIMEOUT_MS   =   10_000       ' number of ms button button must be pressed to place system into programming state 
+  REBOOT_TIMEOUT_MS    =    2_000       ' number of ms the button must be pressed ONCE in PROGRAMMING state to force a software reboot
+  SLEEP_PRESS_MS       =    2_000       ' number of ms the button must be pressed to put the unit to sleep when it is in continuous mode
+  CONTINUOUS_PRESS_MS  =    5_000       ' number of ms the button must be pressed to put the unit in to continuous mode
+
+  WATCH_DOG_TIMEOUT_CNT =  WATCH_DOG_TIMEOUT_MS  * ONE_MS 
+  PROGRAM_TIMEOUT_CNT   =  PROGRAM_TIMEOUT_MS    * ONE_MS
+  REBOOT_TIMEOUT_CNT    =  REBOOT_TIMEOUT_MS     * ONE_MS
+  SLEEP_PRESS_CNT       =  SLEEP_PRESS_MS        * ONE_MS
+  CONTINUOUS_PRESS_CNT  =  CONTINUOUS_PRESS_MS   * ONE_MS  
   
 DAT ' oled messages
   blankMsg   byte   "                ", 0
@@ -220,6 +228,7 @@ VAR
   byte mainState, edgeDetector
   byte inUartBuf[UART_SIZE], inUartIdx, ptrIdx, uartState, inUartPtr[MAX_COMMANDS]
   byte oLedBuf[20] ' set aside some room for the oled 
+  byte sramParms[64]
 
   word dacValue
   word rtcYear, rtcMonth, rtcDay, rtcDow, rtcHour, rtcMinute, rtcSecond
@@ -260,25 +269,30 @@ PUB MAIN | idx, response, displayTime, pressType, flag, oldPhsa
 
   DIRA[WAKEUP] := 0             ' using wakeup as a way to interrupt state machine.  
     
+  UARTS.PUTC(DEBUG, 16)
+  UARTS.STR(DEBUG, string(13, "$PSMSG, Welcome aboard.  Booting system."))
   UARTS.STR(DEBUG, string(13, "$PSMSG, mainCogId: "))
   UARTS.DEC(DEBUG, mainCogId)
 
   UARTS.STR(DEBUG, string(13, "$PSMSG, serialCogId: "))
   UARTS.DEC(DEBUG, serialCogId)
+  
+  'test SRAM storage
+  'WRITE_DEFAULT_PARAMS_TO_SRAM
+  'GET_AND_PRINT_PARAMETERS
 
-  START_WATCHDOG(10_000)
+
+  START_WATCHDOG
   PAUSE_MS(2_000)
   UARTS.STR(DEBUG, string(13, "$PSMSG, watchDogCogId: "))
   UARTS.DEC(DEBUG, watchDogCogId)
 
-    
   PEBBLE.LED1_ON
   PEBBLE.OLED_ON
   PAUSE_MS(100)
   PEBBLE.OLED_WRITE_LINE1(string(" Booting System "))
   
   displayTime := cnt+clkFreq<<1
-  UARTS.STR(DEBUG, string(13, "$PSMSG, Booting geoPebble: "))
   waitcnt(displayTime += clkfreq<<1)
   PET_WATCHDOG
 
@@ -336,9 +350,11 @@ PUB MAIN | idx, response, displayTime, pressType, flag, oldPhsa
   repeat
     PET_WATCHDOG               ' do this every time through the loop.
 
-    repeat                      ' sit here while WAKEUP is held high
-      PAUSE_MS(10)              ' this is a way to interrupt the state machine
-    while INA[WAKEUP] == 1      ' and check the functionality of the watchdog timer code
+    if INA[REED_SWITCH] == PEBBLE#NOT_PRESSED
+      PHSA := 0
+
+    repeat while INA[WAKEUP] == 1       ' and check the functionality of the watchdog timer code
+      PAUSE_MS(10)                      ' this is a way to interrupt the state machine
      
     case mainState
       SLEEP             :
@@ -362,7 +378,7 @@ PUB MAIN | idx, response, displayTime, pressType, flag, oldPhsa
       WAIT_FOR_WAKE_UP :
         'OUTA[WAKEUP] := 1
         PAUSE_MS(100)           ' let's sleep for a bit to save power
-        pressType := PEBBLE.SWITCHED_ON(interval)
+        pressType := PEBBLE.SWITCHED_ON(SLEEP_PRESS_CNT, CONTINUOUS_PRESS_CNT, interval)
         if pressType > 0
           COME_OUT_OF_SLEEP(pressType)
           PHSA := 0               ' clear before moving to new state
@@ -375,7 +391,7 @@ PUB MAIN | idx, response, displayTime, pressType, flag, oldPhsa
         DO_SOMETHING_USEFUL
 
         ' now check to see if we should sleep or not
-        if ( (PHSA > (clkfreq * 5)) )        ' was it pressed for more than 5 seconds?  
+        if (PHSA > SLEEP_PRESS_CNT) AND (PHSA < PROGRAM_TIMEOUT_CNT) AND (INA[REED_SWITCH] == PEBBLE#NOT_PRESSED)        ' was it pressed for more than 5 seconds?  
           UARTS.STR(DEBUG, string(13, "Sleep case: button pressed: "))
           UARTS.DEC(DEBUG, PHSA)
           recordLength := 10
@@ -413,86 +429,72 @@ PUB FREE_COGS | idx, response
 
   OUTA[WAKEUP] := 1
 
-PUB START_WATCHDOG(timeout)
+PUB START_WATCHDOG
 '' method that starts a new watchdog timer in unique cog
 ' first stop any existing watchdog cogs then start the watchdog
   STOP_WATCHDOG
-  watchDogCogId := cognew(WATCHDOG(timeout), @watchDogStack)
+  watchDogCogId := cognew(WATCHDOG, @watchDogStack)
     
-PUB WATCHDOG(timeout) | timeSincePet, t
+PUB WATCHDOG | timeSincePet, t, i
 '' Watchdog function.  Should be started in its own cog.
 '' This watchdog does 3 things.
 '' 1.  it watches a shared memory location (single LONG in HUB).  If that location
-''     isn't updated evert WATCH_DOG_TIMEOUT_MS this cog will reboot the prop.
+''     isn't updated evert WATCH_DOG_TIMEOUT_CNT this cog will reboot the prop.
 '' 2.  watches the reed switch/button to see if it has been pressed for more
-''     than PROGRAM_TIMEOUT_MS.  If the button HAS been pressed longer than this
+''     than PROGRAM_TIMEOUT_CNT.  If the button HAS been pressed longer than this
 ''     it turns on the gumstix allowing the prop to be programmed.
 '' 3.  watches the reed switch/buttong to see if it has been pressed for more
-''     than REBOOT_TIMEOUT_MS.  If the button HAS been pressed longer than this
+''     than REBOOT_TIMEOUT_CNT.  If the button HAS been pressed longer than this
 ''     it reboots the prop.  
-
-'  UARTS.STR(DEBUG, string(13, "Program time: "))
-'  UARTS.HEX(DEBUG, clkfreq/1000 * PROGRAM_TIMEOUT_MS,8)
-'  UARTS.PUTC(DEBUG, TAB)
-'  UARTS.DEC(DEBUG, clkfreq/1000 * PROGRAM_TIMEOUT_MS)
-
-'  UARTS.STR(DEBUG, string(13, "Reboot time: "))
-'  UARTS.HEX(DEBUG, clkfreq/1000 * REBOOT_TIMEOUT_MS,8)
-'  UARTS.PUTC(DEBUG, TAB)
-'  UARTS.DEC(DEBUG, clkfreq/1000 * REBOOT_TIMEOUT_MS)
 
 ' setup counter A in this cog to track times when the "button" is "pressed"
 ' this is used to sleep and wake the system
-  CTRA := %10101 << 26 + REED_SWITCH    ' counter A in LOGIC !A mode
-  FRQA := 1                             ' increment phsa once for every clock cycle that REED_SWITCH is PRESSED
-  PHSA := 0
+  CTRB := %10101 << 26 + REED_SWITCH    ' counter A in LOGIC !A mode
+  FRQB := 1                             ' increment phsa once for every clock cycle that REED_SWITCH is PRESSED
+  PHSB := 0
   
   watchDogTimer := CNT          ' init time so we don't reboot right away
 
   repeat
-    if INA[REED_SWITCH] == PEBBLE#NOT_PRESSED
-      PHSA := 0            ' if button is not pressed clear out PHSA A
-
     PAUSE_MS(10)               ' spend some time sleeping
 
+    if INA[REED_SWITCH] == PEBBLE#NOT_PRESSED
+      PHSB := 0            ' if button is not pressed clear out PHSA A
+
+    ' check how much time has elapsed since last pet
     t := watchDogTimer
     timeSincePet := (CNT - t) / (clkfreq / 1000)              ' how many MS since last pet?
 
     ' Check for watchdog timeout
-    if timeSincePet > timeout
+    if timeSincePet > WATCH_DOG_TIMEOUT_CNT 
       UARTS.PUTC(DEBUG, CLEAR)
       UARTS.PUTC(DEBUG,  HOME)
-      UARTS.STR(DEBUG, string(13,13, "$PSMSG. WATCHDOG REBOOT!"))
+      UARTS.STR(DEBUG, string(13,13, "$PSMSG. WATCHDOG INDUCED REBOOT!"))
       PAUSE_MS(2_000)
       REBOOT
 
-    ' Check for button presses 
-    if ( PHSA > (clkfreq/1000 * PROGRAM_TIMEOUT_MS) )        ' Has button been pressed longer than PROGRAM_TIMEOUT_MS?  
+    ' Check button press time to see if we shoudl enter program mode
+    if ( PHSB > PROGRAM_TIMEOUT_CNT )        ' Has button been pressed longer than PROGRAM_TIMEOUT_CNT?  
       UARTS.PUTC(DEBUG, CLEAR)
       UARTS.PUTC(DEBUG,  HOME)
       UARTS.STR(DEBUG, string(13, "$PSMSG.  Entering programming mode. PHSA: "))
-      UARTS.DEC(DEBUG, PHSA)
+      UARTS.DEC(DEBUG, PHSB)
+      PHSB := 0                 ' init PHSA for software reboot timing
       PEBBLE.GUMSTIX_ON         ' should other stuff be turned off first?
-      repeat
+      repeat 10
         PEBBLE.LEDS_ON
         PAUSE_MS(250)
         PEBBLE.LEDS_OFF
         PAUSE_MS(250)
-      until INA[REED_SWITCH] == PEBBLE#NOT_PRESSED
 
-      PHSA := 0                 ' init PHSA for software reboot timing
+      'shutdown all other cogs
+      repeat i from 0 to 7
+        if i <> cogid
+          cogstop(i)
             
-        if ( PHSA > REBOOT_TIMEOUT_MS )        ' Has button been pressed longer than PROGRAM_TIMEOUT_MS?  
-          UARTS.PUTC(DEBUG, CLEAR)
-          UARTS.PUTC(DEBUG,  HOME)
-          UARTS.STR(DEBUG, string(13,13, "SOFTWARE REBOOT! PHSA: "))
-          UARTS.DEC(DEBUG, PHSA)
-          repeat 50
-            PEBBLE.LEDS_ON
-            PAUSE_MS(100)
-            PEBBLE.LEDS_OFF
-            PAUSE_MS(100)
-          REBOOT
+    ' Check button press time to see if we should issue a software reboot
+    if ( PHSB > REBOOT_TIMEOUT_CNT )        ' Has button been pressed longer than PROGRAM_TIMEOUT_CNT?  
+      REBOOT
 
 
 PUB PET_WATCHDOG
@@ -583,7 +585,7 @@ PUB START_ACQUISITION
 PUB GET_AND_PRINT_PARAMETERS
   ' check to see if factury defaults have already been stored
   'CHECK_DEFAULT_PARAMS
-  GET_PARAMETERS_FROM_EEPROM
+  GET_PARAMETERS_FROM_SRAM
   PRINT_SYSTEM_PARAMETERS                                                     
 
 PUB DO_SOMETHING_USEFUL | rxByte, response, idx
@@ -1126,19 +1128,37 @@ PUB READ_RTC_TIME
   UARTS.PUTC(DEBUG, SPACE)
 }
 
-PUB GET_PARAMETERS_FROM_EEPROM
-' can't currently store parameters in EEPROM so we set them to be this everytime.  
-  sampleRate :=  4000  'PEBBLE.READ_EEPROM_LONG(SPS_ADDRESS) 
-  gainA      :=  1     'PEBBLE.READ_EEPROM_LONG(GAIN_A_ADDRESS)
-  gainB      :=  1     'PEBBLE.READ_EEPROM_LONG(GAIN_B_ADDRESS)
-  gainC      :=  1     'PEBBLE.READ_EEPROM_LONG(GAIN_C_ADDRESS)
-  gainD      :=  10    'PEBBLE.READ_EEPROM_LONG(GAIN_D_ADDRESS)
-  sourceA    :=  INTERNAL 'PEBBLE.READ_EEPROM_LONG(SOURCE_A_ADDRESS)
-  sourceB    :=  INTERNAL 'PEBBLE.READ_EEPROM_LONG(SOURCE_B_ADDRESS)
-  sourceC    :=  INTERNAL 'PEBBLE.READ_EEPROM_LONG(SOURCE_C_ADDRESS)
-  sourceD    :=  INTERNAL 'PEBBLE.READ_EEPROM_LONG(SOURCE_D_ADDRESS)
-  interval   :=  2        '
-  recordLength := 10     ' number of seconds to record
+PUB GET_PARAMETERS_FROM_SRAM
+' can't currently store parameters in EEPROM so we set them to be this everytime.
+  bytemove(@sramParms, PEBBLE.READ_RTC_SRAM, 64)
+  if sramParms[0] == "G" AND sramParms[1] == "P" ' look to see if these data are valid
+    UARTS.STR(DEBUG, string(13,"Parameters loaded from SRAM. "))
+    UARTS.STR(DEBUG, @euiMsg[4])
+    sampleRate := sramParms[2] << 8 | sramParms[3]  ' bytes 2 and 3 are sampleRate
+    gainA      := sramParms[4]                       
+    gainB      := sramParms[5]                       
+    gainC      := sramParms[6]                       
+    gainD      := sramParms[7]                       
+    sourceA    := sramParms[8]
+    sourceB    := sramParms[9]
+    sourceC    := sramParms[10]
+    sourceD    := sramParms[11]
+    interval   := sramParms[12]        '
+    recordLength := sramParms[13]
+  else 
+    UARTS.STR(DEBUG, string(13,"SRAM parameters corrupt. "))
+    UARTS.STR(DEBUG, @euiMsg[4])
+    sampleRate :=  4000  'PEBBLE.READ_EEPROM_LONG(SPS_ADDRESS) 
+    gainA      :=  1     'PEBBLE.READ_EEPROM_LONG(GAIN_A_ADDRESS)
+    gainB      :=  1     'PEBBLE.READ_EEPROM_LONG(GAIN_B_ADDRESS)
+    gainC      :=  1     'PEBBLE.READ_EEPROM_LONG(GAIN_C_ADDRESS)
+    gainD      :=  10    'PEBBLE.READ_EEPROM_LONG(GAIN_D_ADDRESS)
+    sourceA    :=  INTERNAL 'PEBBLE.READ_EEPROM_LONG(SOURCE_A_ADDRESS)
+    sourceB    :=  INTERNAL 'PEBBLE.READ_EEPROM_LONG(SOURCE_B_ADDRESS)
+    sourceC    :=  INTERNAL 'PEBBLE.READ_EEPROM_LONG(SOURCE_C_ADDRESS)
+    sourceD    :=  INTERNAL 'PEBBLE.READ_EEPROM_LONG(SOURCE_D_ADDRESS)
+    interval   :=  2        '
+    recordLength := 10     ' number of seconds to record
 
 PUB STORE_PARAMETERS_TO_EEPROM
   PEBBLE.WRITE_EEPROM_LONG(SPS_ADDRESS, sampleRate)
@@ -1152,6 +1172,23 @@ PUB STORE_PARAMETERS_TO_EEPROM
   PEBBLE.WRITE_EEPROM_LONG(SOURCE_D_ADDRESS, sourceD)
 '  PEBBLE.WRITE_EEPROM_LONG(INTERVAL_ADDRESS, interval)  FIXME
 '  PEBBLE.WRITE_EEPROM_LONG(RECORD_ADDRESS, recordLength)  FIXME
+  
+PUB STORE_PARAMETERS_TO_SRAM
+  sramParms[0] := "G"
+  sramParms[1] := "P" ' look to see if these data are valid
+  sramParms[2] := sampleRate >> 8
+  sramParms[3] := sampleRate & $FF
+  sramParms[4] := gainA
+  sramParms[5] := gainB
+  sramParms[6] := gainC
+  sramParms[7] := gainD
+  sramParms[8] := sourceA
+  sramParms[9] := sourceB
+  sramParms[10] := sourceC
+  sramParms[11] := sourceD
+  sramParms[12] := interval
+  sramParms[13] := recordLength
+  bytemove(@sramParms, PEBBLE.READ_RTC_SRAM, 64)
   
 PUB CHECK_DEFAULT_PARAMS | eepromValue
 
@@ -1178,6 +1215,21 @@ PUB WRITE_DEFAULT_PARAMS_TO_EEPROM
   UARTS.STR(DEBUG, string(13,"$PSMSG,Default paramaters stored to EEPROM."))
   PEBBLE.OLED_WRITE_LINE1(string("WROTE TO EEPROM "))
   PAUSE_MS(1500)
+
+PUB WRITE_DEFAULT_PARAMS_TO_SRAM
+  sampleRate := 1000
+  gainA      :=    1
+  gainB      :=    1
+  gainC      :=    1
+  gainD      :=   10
+  sourceA    := INTERNAL
+  sourceB    := INTERNAL
+  sourceC    := INTERNAL
+  sourceD    := INTERNAL
+  interval   := 2
+  recordLength := 10
+  STORE_PARAMETERS_TO_SRAM
+  UARTS.STR(DEBUG, string(13,"$PSMSG,Default paramaters stored to SRAM."))
 
 PUB PRINT_SYSTEM_PARAMETERS
   

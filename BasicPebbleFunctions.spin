@@ -65,6 +65,7 @@ CON ' RTC and SRAM addresses and constants
   OSCTRIM        = $08
 
   RTC_CFG_BASE   = $07
+  RTC_SRAM_BASE  = $20          ' starting address of the SRAM in the RTC
   EUI_BASE       = $F2          ' See section 6.4 of the datasheet
   
   
@@ -268,6 +269,7 @@ OBJ
 VAR
   byte expVal1, expVal2
   byte eui_48[8]      ' storage for the 8-bytes read from the RTC/Memory
+  byte rtcSram[64]   ' 64-byte SRAM storage
   byte mag[6]
   byte rtcTime[7]
   
@@ -875,6 +877,29 @@ PUB READ_EUI
   
   return @eui_48
 
+PUB READ_RTC_SRAM | idx 
+  I2C.START
+  I2C.WRITE(RTC_ADDR|I2C_WRITE)
+  I2C.WRITE(RTC_SRAM_BASE)
+  I2C.START
+  I2C.WRITE(RTC_ADDR|I2C_READ)
+  repeat idx from 0 to 62
+    rtcSram[idx] := I2C.READ(ACK)
+  rtcSram[63] := I2C.READ(NAK)
+  I2C.STOP
+  
+  return @rtcSram
+
+PUB WRITE_RTC_SRAM(parmsPtr) | idx
+  bytemove(@rtcSram, parmsPtr, 64)       ' copy the parameters to local storage
+  
+  I2C.START
+  I2C.WRITE(RTC_ADDR|I2C_WRITE)
+  I2C.WRITE(RTC_SRAM_BASE)
+  repeat idx from 0 to 63
+    I2C.WRITE(rtcSram[idx])
+  I2C.STOP
+  
 PUB SET_RTC_TIME(year, month, day, hour, minute, second, wkday)
 ' stop the oscillator
 ' write minutes to minutes register (0x01)
@@ -1193,7 +1218,7 @@ PUB WAIT_FOR_TIME(modValue)
   OLED_ON
   OLED_WRITE_LINE1(string("Waking System."))
 
-PUB SWITCHED_ON(interval) 
+PUB SWITCHED_ON(sleepPress, continuousPress, interval) 
 {
   if INA[REED_SWITCH] == 0      ' is button "pressed"?
     waitcnt(clkfreq/1000 + cnt) ' wait for 1/10s debounce
@@ -1208,15 +1233,27 @@ PUB SWITCHED_ON(interval)
     return 1              ' if we are within 20 seconds of the interval minute
 
 ' has there been a button press?
-  if INA[REED_SWITCH] == NOT_PRESSED   ' we can't make a decision until the button is no longer pressed
-    PAUSE_MS(100)
+  case INA[REED_SWITCH]
+    PRESSED     : 
+      PAUSE_MS(1)  ' if it's pressed just wait a bit and return
+    NOT_PRESSED :  ' don't clear PHSA, that's handled in the main object
+      case PHSA
+        clkfreq>>4..clkfreq     : ' button pressed for .25-1 sec
+           return 2
+        4*clkfreq..8*clkfreq    : ' button pressed for 4-8 sec
+           return 3
+
+
+
+{  if INA[REED_SWITCH] == NOT_PRESSED   ' we can't make a decision until the button is no longer pressed
+    PAUSE_MS(10)
     if INA[REED_SWITCH] == NOT_PRESSED ' if switch is STILL not pressed
       case PHSA
         clkfreq>>2..clkfreq     : ' button pressed for .25-1 sec
            return 2
         clkfreq<<2..clkfreq<<3  : ' button pressed for 4-8 sec
            return 3
-      
+}      
   return -1              ' otherwise it's not time to wake up so don't
 
 
