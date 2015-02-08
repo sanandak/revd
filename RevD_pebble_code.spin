@@ -200,7 +200,9 @@ CON ' Reed Switch constants
   PROGRAM_TIMEOUT_CNT   =  PROGRAM_TIMEOUT_MS    * ONE_MS
   REBOOT_TIMEOUT_CNT    =  REBOOT_TIMEOUT_MS     * ONE_MS
   SLEEP_PRESS_CNT       =  SLEEP_PRESS_MS        * ONE_MS
-  CONTINUOUS_PRESS_CNT  =  CONTINUOUS_PRESS_MS   * ONE_MS  
+  CONTINUOUS_PRESS_CNT  =  CONTINUOUS_PRESS_MS   * ONE_MS
+
+
   
 DAT ' oled messages
   blankMsg   byte   "                ", 0
@@ -221,6 +223,7 @@ OBJ
   UBX       : "ubloxInterface2"
   PEBBLE    : "BasicPebbleFunctions"                ' I put these into a seperate file to make editing easier
   COGS      : "sparecogs"
+  RFM       : "rfm69"
   
 VAR
   byte mainCogId, serialCogId, adcCogId, slaveCogId, watchDogCogId
@@ -263,17 +266,50 @@ PUB MAIN | idx, response, displayTime, pressType, flag, oldPhsa
   mainCogId     := cogid
   acqon         := FALSE
 
-  PEBBLE.INIT
-  PEBBLE.GUMSTIX_ON             ' turn on gumstix so we can have a chance to program it. It will stay awake until we get GPS lock. 
+  DIRA~
+
+  'PEBBLE.INIT
+  'PEBBLE.GUMSTIX_ON             ' turn on gumstix so we can have a chance to program it. It will stay awake until we get GPS lock. 
   LAUNCH_SERIAL_COG             ' handle the 2 serial ports- debug and GPS
 
+  PAUSE_MS(1000)
+  
   UARTS.PUTC(DEBUG, 16)
   UARTS.STR(DEBUG, string(13, "$PSMSG, Welcome aboard.  Booting system."))
   UARTS.STR(DEBUG, string(13, "$PSMSG, mainCogId: "))
   UARTS.DEC(DEBUG, mainCogId)
 
-  UARTS.STR(DEBUG, string(13, "$PSMSG, serialCogId: "))
+  UARTS.STR(DEBUG, string(13,"$PSMSG, serialCogId: "))
   UARTS.DEC(DEBUG, serialCogId)
+  UARTS.PUTC(DEBUG, 13)
+
+  if RFM.INIT(DEBUG, 1)    
+    RFM.setModeIdle
+
+  ' transmitter
+{  repeat
+    RFM.sendHello    
+    RFM.setModeTX
+    PAUSE_MS(500)
+    response := RFM.readRSSI
+    UARTS.STR(DEBUG, string("rssi: "))
+    UARTS.DEC(DEBUG, response)
+    UARTS.PUTC(DEBUG, 13)
+ }
+  'receiver
+
+  repeat
+    RFM.setModeRX
+    ' watch for rising edge
+    waitpeq(0, |< RFM#WAKEUP, 0)
+    waitpne(|<RFM#WAKEUP, |<RFM#WAKEUP, 0)
+    UARTS.STR(DEBUG, string("Wakeup rising edge", 13))
+    RFM.readFIFO
+    RFM.setModeRX
+       
+    
+  repeat
+    waitcnt(0)
 
   START_WATCHDOG
   PAUSE_MS(2_000)
