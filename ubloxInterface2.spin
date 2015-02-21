@@ -45,8 +45,6 @@ CON ' GPS constants including bit on I2C expander
   GPS_PPS           = 1
 
 CON ' Constants for processing the ublox data
-  SIZE_OF_UBXPKT    = 1024
-
   ' state machine
   #0, WAIT_FOR_HEADER1, WAIT_FOR_HEADER2, WAIT_FOR_CLASS, WAIT_FOR_MSGID, WAIT_FOR_LEN0, WAIT_FOR_LEN1, READ_PAYLOAD, READ_CKSUM0, READ_CKSUM1, DONE
   ' pkt numbers
@@ -56,8 +54,8 @@ CON ' Constants for processing the ublox data
   STATUS_LEN  = 16
   TIMEGPS_LEN = 16
   TIMEUTC_LEN = 20
-  SVINFO_LEN  = 200
-  RAW_LEN     = 292
+  SVINFO_LEN  = 400
+  RAW_LEN     = 400
   ACK_LEN     = 2
   NAK_LEN     = 2
   MONVER_LEN  = 70
@@ -86,13 +84,12 @@ VAR
   byte state
   byte expanderValue
   byte timeutcPkt[TIMEUTC_LEN]
-' byte ubxpkt[SIZE_OF_UBXPKT]    ' raw packet from ublox; max size of pkt is 8+24*nsv+8
   byte posllhPkt[POSLLH_LEN]
   byte statusPkt[STATUS_LEN]
   byte timegpsPkt[TIMEGPS_LEN]
   byte rawPkt[RAW_LEN]
   byte svinfoPkt[SVINFO_LEN]
-  byte cksum[2]
+  byte cksum[2], ckA, ckB
   byte pktType
   
   byte ackPkt[ACK_LEN]
@@ -100,6 +97,7 @@ VAR
   byte monverPkt[MONVER_LEN]
 
   byte ubxBuffer[1024]
+  'byte tempBuffer[1024]
   
   byte nPktsPerSec                 ' keep track of number of packets in this sec
   byte class, msgid, pkt
@@ -112,7 +110,7 @@ VAR
   byte nSV, svs[16] 'FIXME
 
   byte swVersion[30]
-  byte hwVersion[10]
+  byte hwVersion[30]
   byte capturePPS  
 
   word gpsBufferIdx, payloadIdx, len
@@ -131,7 +129,7 @@ VAR
 DAT ' GPS Config messages
   TIME_PULSE byte 
 '******************************************* Public and Private Methods ****************************
-PUB INIT(_debug, _gps) 
+PUB INIT(_debug, _gps) | idx 
 
   debug    := _debug
   gps_port := _gps
@@ -139,6 +137,8 @@ PUB INIT(_debug, _gps)
 
   gpsBufferIdx  := 0
   payloadIdx := 0
+'  repeat idx from 0 to 1023
+'    tempBuffer[idx] := idx
 
   return @ubxBuffer
   
@@ -188,7 +188,7 @@ PUB HWADDR
   return @hwVersion
 
 PUB TURN_OFF_NMEA | _pkt, nTry, idx
-  UARTS.STR(DEBUG, string(13, "$PSMSG,GPS NMEA OFF"))
+  UARTS.STR(DEBUG, string(13, "$PSMSG, GPS NMEA OFF"))
   ' turn off gll
   CFG_MSG_NMEA[6] := $F0
   CFG_MSG_NMEA[7] := $01
@@ -324,7 +324,7 @@ PUB TURN_OFF_NMEA | _pkt, nTry, idx
 '  uarts.putc(debug, 13)
 
 PUB TURN_ON_RAW | _pkt, nTry, idx
-  UARTS.STR(DEBUG, string(13, "$PSMSG,GPS RAW ON"))
+  UARTS.STR(DEBUG, string(13, "$PSMSG, GPS RAW ON"))
   ' turn on POSLLH
   CFG_MSG[6] := $01
   CFG_MSG[7] := $02
@@ -434,7 +434,7 @@ PUB TURN_ON_RAW | _pkt, nTry, idx
 '  uarts.putc(debug, 13)
 
 PUB TURN_ON_PPS | _pkt, nTry, idx
-  UARTS.STR(DEBUG, string(13, "$PSMSG,1PPS ON"))
+  UARTS.STR(DEBUG, string(13, "$PSMSG, 1PPS ON"))
   ' set up time pulses
 '  repeat idx from 0 to 39
 '    uarts.hex(debug, CFG_TP5[idx], 2)
@@ -489,7 +489,7 @@ PUB SOFT_RESET | idx
   repeat 12
     uarts.putc(gps_port, CFG_RST[idx++])
   
-PUB READ_AND_PROCESS_BYTE(blocking) : retVal | rxByte, ckA, ckB 
+PUB READ_AND_PROCESS_BYTE(blocking) : retVal | rxByte 
 {{
 Take byte from main cog and add it to gps buffer and process messages if appropriate.
 (2 bytes), packet class & id,
@@ -625,11 +625,12 @@ Actions
     READ_CKSUM1 :
       state      := WAIT_FOR_HEADER1
       cksum[1]   := rxByte
-
+      'bytemove(@ubxBuffer, @tempBuffer, 1024)
+ 
       if (cksum[0] == (ckA & $FF)) AND (cksum[1] == (ckB & $FF))
-      retVal := PARSE_UBLOX_PACKET
+        retVal := PARSE_UBLOX_PACKET
   
-  return
+  return retVal
 
 PUB PARSE_UBLOX_PACKET :retVal | i
 '' we know what packet just arrived so let's process it
@@ -685,7 +686,7 @@ PUB CLEAR_UBX_BUFFER
   bytefill(@ubxBuffer, 0, 1024)
   gpsBufferIdx := 0
 
-PUB CALCULATE_RAW_UBLOX_CKSUM(messageAddress, length) | idx, ckA, ckB
+PUB CALCULATE_RAW_UBLOX_CKSUM(messageAddress, length) | idx 
 ' calculate the cksum which does not include the sync characters at position 0 and 1
 ' and does not include the final two bytes of the message because that's where ckA and
 ' ckB end up.  So we go from message[2] through message[length - 2]
