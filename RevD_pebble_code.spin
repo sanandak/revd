@@ -26,9 +26,6 @@ CON ' Clock mode settings
 CON ' VERSION
   VERSION = $01 ' this is a single byte    
                                
-CON ' Button time constants
-  REBOOT_TIME   = 100_000_000*20
-  
 CON ' GPS constants including bit on I2C expander
   EXTERNAL_OSC      = 0
   PERIOD_LENGTH     = 16  ' number of seconds over which to collect oscillator data
@@ -37,6 +34,7 @@ CON ' GPS constants including bit on I2C expander
   GPS_TX_TO         = 3
 
   BYTES_IN_GPS_BUFFER = 1024
+  GPSDO_REF         = 20_000_000  
 
 CON ' Uart command constants
     KILL                  = "K"
@@ -61,6 +59,8 @@ CON ' ON/OFF switch constants
   PRESSED           = 0         ' Pressed is actually logic 0  
 
   WAKEUP            = 14
+  RADIO_CS          = 26
+  
 CON ' Acq enumerations
  #0, TRIGGERED, CONTINUOUS, STAY_ASLEEP
 
@@ -190,7 +190,7 @@ CON ' EEPROM constants
   SOURCE_D_ADDRESS = EEPROM_BASE + 36
 
 CON ' Reed Switch constants
-  WATCH_DOG_TIMEOUT_MS =    2_000       ' time in ms allowed to elapse before watchdog reboots system
+  WATCH_DOG_TIMEOUT_MS =   15_000       ' time in ms allowed to elapse before watchdog reboots system
   PROGRAM_TIMEOUT_MS   =   10_000       ' number of ms button button must be pressed to place system into programming state 
   REBOOT_TIMEOUT_MS    =    2_000       ' number of ms the button must be pressed ONCE in PROGRAMMING state to force a software reboot
   SLEEP_PRESS_MS       =    2_000       ' number of ms the button must be pressed to put the unit to sleep when it is in continuous mode
@@ -230,10 +230,11 @@ VAR
   byte oLedBuf[20] ' set aside some room for the oled 
   byte sramParms[64]
 
-  word dacValue
+  word dacValue, dacNew, dacOld
   word rtcYear, rtcMonth, rtcDay, rtcDow, rtcHour, rtcMinute, rtcSecond
   word year, month, day, hour, minute, second, utcValid, gpsValid, fixStat
           
+  long change, vcxoError, k
   long watchDogTimer, watchDogStack[16]
   ' ubxBufferAddress is the HUB memory location of gps data stored by ubx object
   long ubxBufferAddress, gpsHeader, oldRecLen
@@ -243,6 +244,7 @@ VAR
   ' keep these in order  ymd, hms, cntsAtPPS are populated in the main cog but need to be passed down to the SPIslave cog
   long ymd, hms, cntsAtPPS1, validStatus, cntsTemp, accuracy
   ' the next 2 line refers to the HUB storage where things sit before be shifted out to the gumstix
+  long tempBuf[256]
   long gpsDataToWrite, gpsBuffer[256]
   long slaveBufCMD, slaveBuffer[LONGS_IN_SLAVE_BUFFER]       
 
@@ -253,19 +255,29 @@ VAR
 
 PUB MAIN | idx, response, displayTime, pressType, flag, oldPhsa
 ' the main method here is a simple state machine
-' Wednesday morning in Meadville
 
+  mainCogId     := cogid
+  watchDogCogId := -1
+  serialCogId   := -1
   adcCogId      := -1
   slaveCogId    := -1
-  serialCogId   := -1
+
   oldDay        := -1
-  watchDogCogId := -1
-  mainCogId     := cogid
   acqon         := FALSE
 
+  repeat idx from 0 to 256-1
+    tempBuf[idx] := idx
+  
   PEBBLE.INIT
   PEBBLE.GUMSTIX_ON             ' turn on gumstix so we can have a chance to program it. It will stay awake until we get GPS lock. 
+  START_WATCHDOG
   LAUNCH_SERIAL_COG             ' handle the 2 serial ports- debug and GPS
+
+  PEBBLE.LED1_ON
+  PEBBLE.OLED_ON
+  PAUSE_MS(100)
+  PEBBLE.OLED_WRITE_LINE1(string(" Booting System "))
+
 
   UARTS.PUTC(DEBUG, 16)
   UARTS.STR(DEBUG, string(13, "$PSMSG, Welcome aboard.  Booting system."))
@@ -275,15 +287,11 @@ PUB MAIN | idx, response, displayTime, pressType, flag, oldPhsa
   UARTS.STR(DEBUG, string(13, "$PSMSG, serialCogId: "))
   UARTS.DEC(DEBUG, serialCogId)
 
-  START_WATCHDOG
+  
   PAUSE_MS(2_000)
   UARTS.STR(DEBUG, string(13, "$PSMSG, watchDogCogId: "))
   UARTS.DEC(DEBUG, watchDogCogId)
 
-  PEBBLE.LED1_ON
-  PEBBLE.OLED_ON
-  PAUSE_MS(100)
-  PEBBLE.OLED_WRITE_LINE1(string(" Booting System "))
   
   displayTime := cnt+clkFreq<<1
   waitcnt(displayTime += clkfreq<<1)
@@ -322,6 +330,9 @@ PUB MAIN | idx, response, displayTime, pressType, flag, oldPhsa
   PRINT_TIME_AND_DATE
   PAUSE_MS(2000)
 
+  PEBBLE.OLED_WRITE_LINE1(string("Testing GPSDO"))
+  'CALIBRATE_GPSDO
+  
 ' setup counter A in this cog to track times when the "button" is "pressed"
 ' this is used to sleep and wake the system
   CTRA := %10101 << 26 + REED_SWITCH    ' counter A in LOGIC !A mode
@@ -332,13 +343,13 @@ PUB MAIN | idx, response, displayTime, pressType, flag, oldPhsa
   mainState := SLEEP
   uartState := WAITING_FOR_START
 
-' Here is the main system state machine.  Do a couple checks everytime around the loop
-' then take care of business
-
 ' use the following three lines to boot into continuous mode.
-'  COME_OUT_OF_SLEEP(3)
-'  PHSA := 0               ' clear before moving to new state
-'  mainState := ACQUISITION_MODE
+  COME_OUT_OF_SLEEP(3)
+  PHSA := 0               ' clear before moving to new state
+  mainState := ACQUISITION_MODE
+
+  DIRA[WAKEUP] := 1            ' set to output
+  DIRA[RADIO_CS] := 1          ' set to output
 
   repeat
     PET_WATCHDOG               ' do this every time through the loop.
@@ -346,9 +357,6 @@ PUB MAIN | idx, response, displayTime, pressType, flag, oldPhsa
     if INA[REED_SWITCH] == PEBBLE#NOT_PRESSED
       PHSA := 0
 
-    repeat while INA[WAKEUP] == 1       ' and check the functionality of the watchdog timer code
-      PAUSE_MS(10)                      ' this is a way to interrupt the state machine
-     
     case mainState
       SLEEP             :
         UARTS.STR(DEBUG, string(13, "$PSMSG. Sleeping system.  Use magnet to wake or wait for trigger."))
@@ -365,23 +373,22 @@ PUB MAIN | idx, response, displayTime, pressType, flag, oldPhsa
         mainState := WAIT_FOR_WAKE_UP
         PHSA := 0               ' clear before moving to new state
         FLAG := FALSE           ' anytime we sleep clear flag
-        recordLength := 10       ' always set record lenght to 10 before sleeping
+        recordLength := 10      ' always set record lenght to 10 before sleeping
         
                                         
       WAIT_FOR_WAKE_UP :
-        'OUTA[WAKEUP] := 1
         PAUSE_MS(100)           ' let's sleep for a bit to save power
         pressType := PEBBLE.SWITCHED_ON(SLEEP_PRESS_CNT, CONTINUOUS_PRESS_CNT, interval)
         if pressType > 0
           COME_OUT_OF_SLEEP(pressType)
           PHSA := 0               ' clear before moving to new state
           mainState := ACQUISITION_MODE
-        'OUTA[WAKEUP] := 0
 
       ACQUISITION_MODE  :
-        'OUTA[WAKEUP] := 1
 
+        'OUTA[RADIO_CS] := 1
         DO_SOMETHING_USEFUL
+        'OUTA[RADIO_CS] := 0
 
         ' now check to see if we should sleep or not
         if (PHSA > SLEEP_PRESS_CNT) AND (PHSA < PROGRAM_TIMEOUT_CNT) AND (INA[REED_SWITCH] == PEBBLE#NOT_PRESSED)        ' was it pressed for more than 5 seconds?  
@@ -398,29 +405,17 @@ PUB MAIN | idx, response, displayTime, pressType, flag, oldPhsa
           PHSA := 0               ' clear before moving to new state
           mainState := SLEEP
 
-        'OUTA[WAKEUP] := 0
-
-{      SHUTDOWN          :
-        UARTS.STR(DEBUG, string(13, "$PSMSG, Sleeping System at:"))
-        UPDATE_TIME_AND_DATE
-        PRINT_TIME_AND_DATE
-        PEBBLE.OLED_WRITE_LINE1(0, 1, string("Sleeping System "))
-        PAUSE_MS(1000)
-        PHSA := 0               ' clear before moving to new state
-        FLAG := FALSE
-        mainState := SLEEP
-}
 
 PUB FREE_COGS | idx, response
   response := cogs.freestring
   repeat idx from 0 to 7
     if byte[response][idx] => "0" AND byte[response][idx] =< "7"
-      OUTA[WAKEUP] := 1
+'      OUTA[WAKEUP] := 1
     PAUSE_MS(5)
-    OUTA[WAKEUP] := 0
+'    OUTA[WAKEUP] := 0
     PAUSE_MS(5)
 
-  OUTA[WAKEUP] := 1
+'  OUTA[WAKEUP] := 1
 
 PUB START_WATCHDOG
 '' method that starts a new watchdog timer in unique cog
@@ -428,7 +423,181 @@ PUB START_WATCHDOG
   STOP_WATCHDOG
   watchDogCogId := cognew(WATCHDOG, @watchDogStack)
     
-PUB WATCHDOG | timeSincePet, t, i
+PUB CALIBRATE_SYSTEM_CLOCK | e_time, b_time, diff
+  repeat 15
+    waitpne(0,constant(|<GPS_PPS), 0)    ' wait for pin to go high
+    e_time := cnt
+
+    diff := e_time - b_time
+    uarts.str(DEBUG,string(13,"  Number of cnts:   "))
+    uarts.dec(DEBUG, diff)
+
+    b_time := e_time
+    PAUSE_MS(200)
+
+PUB CAPTURE_VXCO_VALUES | i, t1, risingEdge, t2
+' this method should run in its own cog
+' setup counter A in this cog to count 20Mhz pulses
+' this is used for discplining the VCXO
+  CTRA := %01010 << 26 + EXTERNAL_OSC   ' counter A in POSedge mode
+  FRQA := 1                             ' increment once per pulse
+
+'  uarts.str(DEBUG,string(13,"Waiting for PPS before disclipining VCXO."))
+  waitpeq(0, constant(|<GPS_PPS), 0)    ' wait for pin to go low
+  waitpne(0, constant(|<GPS_PPS), 0)    ' wait for pin to go high
+
+'  uarts.str(DEBUG,string(13, "  ---- Calibrating GPSDO  ----"))  
+
+'  CALIBRATE_GPSDO
+
+  dacValue := $7FFF       ' set to middle of the road value
+  dacOld := dacValue
+  uarts.str(DEBUG,string(13,"DAC start value: "))
+  uarts.dec(DEBUG,dacValue)
+  PEBBLE.WRITE_TO_DAC(dacValue)     ' put a middle of the road value in here to start with
+
+  CALIBRATE_SYSTEM_CLOCK
+   
+  ' DAC values:20Mhz values range from 0:19_999_615 to 65024:20_000_244
+  uarts.str(DEBUG,string(13,"Waiting for PPS before disclipining VCXO."))
+  waitpeq(0, constant(|<GPS_PPS), 0)    ' wait for pin to go low
+  waitpne(0, constant(|<GPS_PPS), 0)    ' wait for pin to go high
+  PHSA := 0
+
+  i := 0
+  repeat
+    t1 := 0
+    waitpeq(0, constant(|<GPS_PPS), 0)    ' wait for pin to go low
+    waitpne(0, constant(|<GPS_PPS), 0)    ' wait for pin to go high
+    't1 -= cnt
+    risingEdge  := PHSA    ' this capture of PHSA takes 1136 clock counts
+    t1 += cnt
+    if risingEdge < (GPSDO_REF+GPSDO_REF>>1)  ' could we have one or more PPS edges?
+      vcxoError := (risingEdge - GPSDO_REF)
+      dacNew := dacOld - K * vcxoError
+      'temp := 25' READ_TC                                          ' read the temperature
+    
+      uarts.putc(DEBUG, 13)
+      uarts.dec(DEBUG,i++)
+      'uarts.putc(DEBUG, TAB)
+      'SHOW_C(temp)                                             ' display in °C
+      uarts.putc(DEBUG, TAB)
+      uarts.dec(DEBUG,  risingEdge)
+      uarts.putc(DEBUG, TAB)
+      uarts.dec(DEBUG,  vcxoError)
+      uarts.putc(DEBUG, TAB)
+      uarts.dec(DEBUG,  dacOld)
+      uarts.putc(DEBUG, TAB)
+      uarts.dec(DEBUG,  dacNew)
+      uarts.putc(DEBUG, TAB)
+      PEBBLE.WRITE_TO_DAC(dacNew)
+'      PEBBLE.WRITE_TO_OLED(0, 1, oledClrLine)
+'      PEBBLE.WRITE_TO_OLED(0, 1, string("What's up?"))
+      
+
+      
+      dacOld := dacNew
+     
+    
+    t2 := 0
+    waitpeq(0, constant(|<GPS_PPS), 0)    ' wait for pin to go low
+    waitpne(0, constant(|<GPS_PPS), 0)    ' wait for pin to go high
+    't2 -= cnt
+    PHSA := 0    ' clearing PHSA takes 1136 clock counts
+    t2 += cnt
+    
+
+PUB CALIBRATE_GPSDO | highDac, lowDac, highCount, lowCount, error
+' uset CTRA briefly, to get a measurement of linear drift of the VCXO
+' and to calculate a value for K our VCXO factor
+  CTRA := %01010 << 26 + EXTERNAL_OSC   ' counter A in POSedge mode
+  FRQA := 1                             ' increment once per pulse
+
+  uarts.str(DEBUG,string(13,"Calibrating GPSDO."))
+  uarts.str(DEBUG,string(13," DAC value   VCXO Meas."))
+
+' get a couple readings from the GPSDO to set a linear frequncy/DAC relationship
+  uarts.putc(DEBUG, 13)
+  highDAC := $BFFF
+'  highDAC := $FFFF
+  PEBBLE.WRITE_TO_DAC(highDAC)  ' set DAC to 3/4 full-scale value
+  PAUSE_MS(2000)       ' let it settle
+  waitpeq(0, constant(|<GPS_PPS), 0)    ' wait for pin to go low
+  waitpne(0, constant(|<GPS_PPS), 0)    ' wait for pin to go high
+  PHSA := 0
+
+  repeat 20
+    PET_WATCHDOG               ' do this every time through the loop.
+    waitpeq(0, constant(|<GPS_PPS), 0)    ' wait for pin to go low
+    waitpne(0, constant(|<GPS_PPS), 0)    ' wait for pin to go high
+    highCount := PHSA  ' an adjustment based on comparing prop counts to freq counter
+    PHSA := 0
+    uarts.putc(DEBUG, TAB)
+    uarts.dec(DEBUG,highDAC)
+    uarts.putc(DEBUG, TAB)
+    uarts.dec(DEBUG,highCount)
+    uarts.putc(DEBUG, 13)
+
+  lowDAC := $3FFF
+'  lowDAC := 0
+  uarts.putc(DEBUG, 13)
+  PEBBLE.WRITE_TO_DAC(lowDAC)  ' set DAC to 1/4 full-scale value
+  PAUSE_MS(2000)       ' let it settle
+  waitpeq(0, constant(|<GPS_PPS), 0)    ' wait for pin to go low
+  waitpne(0, constant(|<GPS_PPS), 0)    ' wait for pin to go high
+  PHSA := 0
+
+  repeat 20
+    PET_WATCHDOG               ' do this every time through the loop.
+    waitpeq(0, constant(|<GPS_PPS), 0)    ' wait for pin to go low
+    waitpne(0, constant(|<GPS_PPS), 0)    ' wait for pin to go high
+    lowCount := PHSA  ' an adjustment based on comparing prop counts to freq counter
+    PHSA := 0
+
+    uarts.putc(DEBUG, TAB)
+    uarts.dec(DEBUG,lowDAC)
+    uarts.putc(DEBUG, TAB)
+    uarts.dec(DEBUG,lowCount)
+    uarts.putc(DEBUG, 13)
+
+  k := (highDAC-lowDAC)/(highCount-lowCount)
+  uarts.str(DEBUG,string(13,"K="))
+  uarts.dec(DEBUG, k)
+  uarts.putc(DEBUG, 13)
+
+  ' now do best we can to predict a dacValue that will give smallest error
+  dacValue := (GPSDO_REF-lowCount)* k + lowDAC
+  UARTS.STR(DEBUG, string(13, "$PSMSG, Setting DAC value: "))
+  uarts.dec(DEBUG,dacValue)
+  PEBBLE.WRITE_TO_DAC(dacValue)     ' put a middle of the road value in here to start with
+  uarts.putc(DEBUG, 13)
+
+  repeat 
+    PET_WATCHDOG               ' do this every time through the loop.
+    waitpeq(0, constant(|<GPS_PPS), 0)    ' wait for pin to go low
+    waitpne(0, constant(|<GPS_PPS), 0)    ' wait for pin to go high
+    lowCount := PHSA  ' an adjustment based on comparing prop counts to freq counter
+    PHSA   := 0
+    error  := (lowCount - GPSDO_REF)
+    dacNew := dacOld - K * error
+    PEBBLE.WRITE_TO_DAC(dacNew)
+    dacOld := dacNew
+     
+
+    uarts.putc(DEBUG, TAB)
+    uarts.dec(DEBUG,dacValue)
+    uarts.putc(DEBUG, TAB)
+    uarts.dec(DEBUG,lowCount)
+    uarts.putc(DEBUG, TAB)
+    uarts.dec(DEBUG,error)
+    uarts.putc(DEBUG, TAB)
+    uarts.dec(DEBUG,dacOld)
+    uarts.putc(DEBUG, TAB)
+    uarts.dec(DEBUG,dacNew)
+    uarts.putc(DEBUG, 13)
+
+  
+PUB WATCHDOG | timeSincePet, programMode, i
 '' Watchdog function.  Should be started in its own cog.
 '' This watchdog does 3 things.
 '' 1.  it watches a shared memory location (single LONG in HUB).  If that location
@@ -440,38 +609,35 @@ PUB WATCHDOG | timeSincePet, t, i
 ''     than REBOOT_TIMEOUT_CNT.  If the button HAS been pressed longer than this
 ''     it reboots the prop.  
 
-' setup counter A in this cog to track times when the "button" is "pressed"
+' setup counter B in this cog to track times when the "button" is "pressed"
 ' this is used to sleep and wake the system
-  CTRB := %10101 << 26 + REED_SWITCH    ' counter A in LOGIC !A mode
-  FRQB := 1                             ' increment phsa once for every clock cycle that REED_SWITCH is PRESSED
+  CTRB := %10101 << 26 + REED_SWITCH    ' counter B in LOGIC !B mode
+  FRQB := 1                             ' increment phsb once for every clock cycle that REED_SWITCH is PRESSED
   PHSB := 0
   
+
   watchDogTimer := CNT          ' init time so we don't reboot right away
+  programMode := FALSE
 
   repeat
-    PAUSE_MS(10)               ' spend some time sleeping
+    PAUSE_MS(10)                ' spend some time sleeping but not too much
 
     if INA[REED_SWITCH] == PEBBLE#NOT_PRESSED
       PHSB := 0            ' if button is not pressed clear out PHSA A
 
-    ' check how much time has elapsed since last pet
-    t := watchDogTimer
-    timeSincePet := (CNT - t) / (clkfreq / 1000)              ' how many MS since last pet?
-
     ' Check for watchdog timeout
-    if timeSincePet > WATCH_DOG_TIMEOUT_CNT 
-      UARTS.PUTC(DEBUG, CLEAR)
-      UARTS.PUTC(DEBUG,  HOME)
-      UARTS.STR(DEBUG, string(13,13, "$PSMSG. WATCHDOG INDUCED REBOOT!"))
-      PAUSE_MS(2_000)
+    if (CNT - watchDogTimer) > WATCH_DOG_TIMEOUT_CNT 
       REBOOT
 
-    ' Check button press time to see if we shoudl enter program mode
-    if ( PHSB > PROGRAM_TIMEOUT_CNT )        ' Has button been pressed longer than PROGRAM_TIMEOUT_CNT?  
-      UARTS.PUTC(DEBUG, CLEAR)
-      UARTS.PUTC(DEBUG,  HOME)
-      UARTS.STR(DEBUG, string(13, "$PSMSG.  Entering programming mode. PHSA: "))
-      UARTS.DEC(DEBUG, PHSB)
+    ' Check button press time to see if we should enter program mode
+    if programMode == FALSE AND ( PHSB > PROGRAM_TIMEOUT_CNT )        ' Has button been pressed longer than PROGRAM_TIMEOUT_CNT?  
+      programMode := TRUE
+      ' shutdown all other cogs
+      repeat i from 0 to 7
+        if i <> watchDogCogId
+          cogstop(i)
+
+      PEBBLE.INIT      
       PHSB := 0                 ' init PHSA for software reboot timing
       PEBBLE.GUMSTIX_ON         ' should other stuff be turned off first?
       repeat 10
@@ -480,14 +646,12 @@ PUB WATCHDOG | timeSincePet, t, i
         PEBBLE.LEDS_OFF
         PAUSE_MS(250)
 
-      'shutdown all other cogs
-      repeat i from 0 to 7
-        if i <> cogid
-          cogstop(i)
-            
     ' Check button press time to see if we should issue a software reboot
-    if ( PHSB > REBOOT_TIMEOUT_CNT )        ' Has button been pressed longer than PROGRAM_TIMEOUT_CNT?  
-      REBOOT
+    repeat ' we're stuck in program mode.  Just wait here until we get reprogrammed or a request to reboot
+      if INA[REED_SWITCH] == PEBBLE#NOT_PRESSED
+        PHSB := 0            ' if button is not pressed clear out PHSA A
+      if ( PHSB > REBOOT_TIMEOUT_CNT )        ' Has button been pressed longer than PROGRAM_TIMEOUT_CNT?  
+        REBOOT
 
 
 PUB PET_WATCHDOG
@@ -509,6 +673,19 @@ PUB COME_OUT_OF_SLEEP(pressType)
   UARTS.STR(DEBUG, string(13, "$PSMSG, System awake and ready for action: "))
   UARTS.DEC(DEBUG, PHSA)
   PRINT_RTC_TIME
+
+  UARTS.STR(DEBUG, string(13, "$PSMSG, mainCogId: "))
+  UARTS.DEC(DEBUG, mainCogId)
+
+  UARTS.STR(DEBUG, string(13, "$PSMSG, serialCogId: "))
+  UARTS.DEC(DEBUG, serialCogId)
+
+'  START_WATCHDOG
+'  PAUSE_MS(2_000)
+  UARTS.STR(DEBUG, string(13, "$PSMSG, watchDogCogId: "))
+  UARTS.DEC(DEBUG, watchDogCogId)
+
+
   case pressType
     1 : UARTS.STR(DEBUG, string(13, "Triggered mode ")) 
         recordLength := 10
@@ -519,6 +696,7 @@ PUB COME_OUT_OF_SLEEP(pressType)
     3 : UARTS.STR(DEBUG, string(13, "Continuous mode "))
         recordLength := 0
         sampleRate :=  1000  'PEBBLE.READ_EEPROM_LONG(SPS_ADDRESS) 
+
   UARTS.DEC(DEBUG, recordLength)
   PAUSE_MS(200)
   PEBBLE.OLED_WRITE_LINE1(@wakeMsg)
@@ -528,6 +706,8 @@ PUB COME_OUT_OF_SLEEP(pressType)
   PRINT_TIME_AND_DATE
   START_ACQUISITION
 
+  UARTS.STR(DEBUG, string(13, "FREE COGS: "))
+  UARTS.STR(DEBUG, cogs.freestring)
 
 PUB START_ACQUISITION  
 ' after waking from sleep we need to start up a number of different things.
@@ -609,9 +789,9 @@ PUB DO_SOMETHING_USEFUL | rxByte, response, idx
                                        inUartBuf[inUartIdx++ <# UART_SIZE] := rxByte     ' if not, keep adding to it
                                        uartState := WAITING_FOR_END
 
-     PROCESS_BUFFER          :   'OUTA[WAKEUP] := 1
+     PROCESS_BUFFER          :   OUTA[WAKEUP] := 1
                                  PROCESS_UART
-                                 'OUTA[WAKEUP] := 0
+                                 OUTA[WAKEUP] := 0
                                  uartState := WAITING_FOR_START
     
      
@@ -627,7 +807,9 @@ PUB DO_SOMETHING_USEFUL | rxByte, response, idx
   ' here we process all bytes sitting in the gps buffer -
   ' and we stay in this repeat until the uart buffer is empty OR we've reached the end of the packet
   repeat
+    OUTA[RADIO_CS] := 1
     response := UBX.READ_AND_PROCESS_BYTE(FALSE)
+    OUTA[RADIO_CS] := 0
   until response == -1 OR response == UBX#RXMRAW
 
   
@@ -635,8 +817,11 @@ PUB DO_SOMETHING_USEFUL | rxByte, response, idx
     UARTS.STR(DEBUG, string(13,"$PSMSG, FIFO: "))
     UARTS.DEC(DEBUG, blocksInFIFO)                     ' if the gps buffer is empty put something into it
     if gpsDataToWrite == MY_FALSE                      ' have the data we put there previously been written?
-      'longfill(@gpsBuffer, 0, 256)
-      bytemove(@gpsBuffer, ubxBufferAddress, 1024)     ' copy that info into gpsBuffer
+      'bytemove(@gpsBuffer, ubxBufferAddress, 1024)     ' copy that info into gpsBuffer
+      tempBuf[0]   := CNT
+      tempBuf[127] := CNT
+'      longmove(@gpsBuffer,      @tempBuf,        256)
+      longfill(@gpsBuffer,      $FFFF_FFFF,       256)
       longmove(@gpsBuffer[129], @gpsBuffer[127], 127)  ' move data over so we can insert header
       longmove(@gpsBuffer[1],   @gpsBuffer[0],   127)  ' move data over so we can insert header
       gpsBuffer[0]   := "P"  | "G" << 8 | VERSION << 16 | validStatus << 24
@@ -649,8 +834,8 @@ PUB DO_SOMETHING_USEFUL | rxByte, response, idx
           UARTS.PUTC(DEBUG, TAB)
         'if idx == 512
         '  UARTS.PUTC(DEBUG, 13)
-        'UARTS.HEX(DEBUG, BYTE[@gpsBuffer][idx++],2)
-        UARTS.HEX(DEBUG, BYTE[ubxBufferAddress][idx++],2)
+        UARTS.HEX(DEBUG, BYTE[@gpsBuffer][idx++],2)
+        'UARTS.HEX(DEBUG, BYTE[ubxBufferAddress][idx++],2)
         UARTS.PUTC(DEBUG, SPACE)
 }        
 
@@ -917,7 +1102,7 @@ PUB SETUP_AND_LAUNCH_ADC(_sps, gA, gB, gC, gD, aMux, bMux, cMux, dMux) | sampleR
   data1.byte[3] := "P"
   data1.byte[2] := "S"
   data1.byte[1] := VERSION
-  data1.byte[0] := 0 ' change this to clock status
+  data1.byte[0] := 0 ' this gets updated in each packet to reflect lock status
   
   data2.byte[3] := sampleRateEnum
   data2.byte[2] := (aMux << 3 | bMux << 2 | cMux << 1 | dMux ) & $0F
@@ -1158,7 +1343,6 @@ PUB GET_PARAMETERS_FROM_SRAM | response
     STORE_PARAMETERS_TO_SRAM
     UARTS.STR(DEBUG, string(13,"Wrote new parameters to SRAM."))
 
-
 PUB STORE_PARAMETERS_TO_SRAM
   sramParms[0] := "G"
   sramParms[1] := "P" ' look to see if these data are valid
@@ -1278,7 +1462,7 @@ PUB LAUNCH_SERIAL_COG
   PAUSE_MS(300)
 
 PUB TURN_ON_GPS
-  UARTS.STR(DEBUG, string(13, "$PSMSG,GPS ON"))
+  UARTS.STR(DEBUG, string(13, "$PSMSG, GPS ON"))
   PEBBLE.GPS_ON
   ubxBufferAddress := UBX.INIT(DEBUG, GPS_PORT)          
 
@@ -1518,7 +1702,21 @@ GUMSTIX_SLAVE         org            0
         
           rdlong  soutData,      slavePtr              ' get long from HUB
           'mov     soutData,      sixsix                ' put 0x5858_5858 into outbyte
-          call    #WRITE_LONG
+'          call    #WRITE_LONG
+
+          mov     sBits,        #32        wz   ' setup number of bits in write; set Z=0 
+                                                ' Z=0; Z flag is set (1) if Value equals zero
+
+:wslaveLoop
+          rol     soutData,     #1         wc    ' get highest bit of outData
+          muxc    outa,         somiMask         ' put bit onto MISO
+          waitpeq ssclkMask,    ssclkMask        ' wait for CLK to go high
+          waitpne ssclkMask,    ssclkMask        ' wait for CLK to go low
+          djnz    sBits,        #:wslaveLoop     ' Decrement loop count.
+
+          muxz    outa,         somiMask         ' make sure MISO is low on exit
+
+
           add     slavePtr,      #4                    ' increment bufferPtr
           
           djnz    sampsInBlock,  #:slaveLoop
@@ -1539,10 +1737,10 @@ WRITE_LONG
                                                 ' Z=0; Z flag is set (1) if Value equals zero
 
 :wslaveLoop
-          waitpne ssclkMask,    ssclkMask        ' wait for CLK to go low
           rol     soutData,     #1         wc    ' get highest bit of outData
           muxc    outa,         somiMask         ' put bit onto MISO
           waitpeq ssclkMask,    ssclkMask        ' wait for CLK to go high
+          waitpne ssclkMask,    ssclkMask        ' wait for CLK to go low
           djnz    sBits,        #:wslaveLoop     ' Decrement loop count.
 
           muxz    outa,         somiMask         ' make sure MISO is low on exit
@@ -1786,22 +1984,22 @@ MAX11040K         org         0
           
           ' read Z connected to RED/BROWN phone
           call    #READ_SAMPLE  ' sample is now in data 
-          'mov     data,         #$A
+          mov     data,         ffff_ffff'#$A
           call    #SWAP_AND_WRITE_LONG_TO_HUB
 
           ' read N/S connected to ORANGE/YELLOW
           call    #READ_SAMPLE  ' sample is now in data
-          'mov     data,         #$B
+          mov     data,         ffff_ffff'#$B
           call    #SWAP_AND_WRITE_LONG_TO_HUB
                                 
           ' read E/W connected to BLUE/GREEN
           call    #READ_SAMPLE  ' sample is now in data
-          'mov     data,         #$C
+          mov     data,         #$C
           call    #SWAP_AND_WRITE_LONG_TO_HUB
 
           ' read D                                      ' we need to read this 4 sample even
           call    #READ_SAMPLE  ' sample is now in data
-          'mov     data,         #$D
+          mov     data,         #$D
           mov     data,         cnt
           call    #SWAP_AND_WRITE_LONG_TO_HUB
 
@@ -2173,6 +2371,7 @@ euiValue         long            0
 endianMask       long            $00FF_00FF         ' used for byte swap
 data1Mask        long            $FFFF_FF00         ' mask used on data1 to update clock status
 cksumMask        long            $0000_00FF         ' use this to mask off lowest 8 bits of cksum
+ffff_ffff        long            $FFFF_FFFF
 
 swapTemp         res             1
 atemp            res             1

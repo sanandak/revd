@@ -412,11 +412,11 @@ PUB SLEEP_ALL_BUT_GPS
   OUTA[SRAM_CS]  := 1           ' hold SRAM in RESET
 
 ' setup the shared SPI
-  DIRA[RADIO_CS] := 1
+  'DIRA[RADIO_CS] := 1
   DIRA[OLED_CS]  := 1
   DIRA[DAC_CS]   := 1
   
-  OUTA[RADIO_CS] := 1
+  'OUTA[RADIO_CS] := 1
   OUTA[OLED_CS]  := 0           ' current appears to leak from this device.  Since it's powered off don't worry about CS lineS
   OUTA[DAC_CS]   := 1
 
@@ -446,11 +446,11 @@ PUB SET_EXPANDER_TO_SLEEP
   OUTA[SRAM_CS]  := 1           ' hold SRAM in RESET
 
 ' setup the shared SPI
-  DIRA[RADIO_CS] := 1
+  'DIRA[RADIO_CS] := 1
   DIRA[OLED_CS]  := 1
   DIRA[DAC_CS]   := 1
   
-  OUTA[RADIO_CS] := 1
+  'OUTA[RADIO_CS] := 1
   OUTA[OLED_CS]  := 0           ' current appears to leak from this device.  Since it's powered off don't worry about CS lineS
   OUTA[DAC_CS]   := 1
 
@@ -478,11 +478,11 @@ PUB SET_EXPANDER_TO_LOW_POWER : response
   OUTA[SRAM_CS]  := 1           ' hold SRAM in RESET
 
 ' setup the shared SPI
-  DIRA[RADIO_CS] := 1
+  'DIRA[RADIO_CS] := 1
   DIRA[OLED_CS]  := 1
   DIRA[DAC_CS]   := 1
   
-  OUTA[RADIO_CS] := 1
+  'OUTA[RADIO_CS] := 1
   OUTA[OLED_CS]  := 0           ' current appears to leak from this device.  Since it's powered off don't worry about CS lineS
   OUTA[DAC_CS]   := 1
 
@@ -594,11 +594,11 @@ PUB OLED_ON
   EXPANDER_WRITE(EXPANDER_2, expVal2)
 
 ' setup the shared SPI
-  DIRA[RADIO_CS] := 1
+  'DIRA[RADIO_CS] := 1
   DIRA[OLED_CS]  := 1
   DIRA[DAC_CS]   := 1
   
-  OUTA[RADIO_CS] := 1
+  'OUTA[RADIO_CS] := 1
   OUTA[OLED_CS]  := 1           ' current appears to leak from this device.  Since it's powered off don't worry about CS lineS
   OUTA[DAC_CS]   := 1
 
