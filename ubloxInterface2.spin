@@ -113,7 +113,7 @@ VAR
   byte hwVersion[30]
   byte capturePPS  
 
-  word gpsBufferIdx, payloadIdx, len
+  word ubxBufferIdx1, ubxBufferIdx2, payloadIdx, len
   word utcyear
 
   long accuracy
@@ -135,8 +135,8 @@ PUB INIT(_debug, _gps) | idx
   gps_port := _gps
   state    := WAIT_FOR_HEADER1
 
-  gpsBufferIdx  := 0
-  payloadIdx := 0
+  CLEAR_UBX_BUFFER
+  payloadIdx    := 0
 '  repeat idx from 0 to 1023
 '    tempBuffer[idx] := idx
 
@@ -526,9 +526,15 @@ Actions
     if rxByte == -1                      ' -1 means no data; don't do anything
       return retVal := -1
 
-  ubxBuffer[gpsBufferIdx++] := rxByte  
-  if gpsBufferIdx == 1024
-     gpsBufferIdx := 0                 ' limit max val for gpsBufferIdx to avoid memory overruns.        
+  ubxBuffer[ubxBufferIdx1-ubxBufferIdx2] := rxByte
+  ubxBufferIdx2++
+  if ubxBufferIdx2 == 4
+    ubxBufferIdx1 += 4
+    ubxBufferIdx2 := 0
+      
+  if ubxBufferIdx1 > 1024
+     ubxBufferIdx1 := 3                 ' limit max val for ubxBufferIdx1 to avoid memory overruns.        
+     ubxBufferIdx2 := 0
 
   case state
     WAIT_FOR_HEADER1 :
@@ -684,7 +690,8 @@ PUB BUFFER_ADDRESS
   
 PUB CLEAR_UBX_BUFFER
   bytefill(@ubxBuffer, 0, 1024)
-  gpsBufferIdx := 0
+  ubxBufferIdx1 := 3            ' first byte goes into slot 3
+  ubxBufferIdx2 := 0            ' we need to walk backwards through buffer so use this to keep track of subtraction
 
 PUB CALCULATE_RAW_UBLOX_CKSUM(messageAddress, length) | idx 
 ' calculate the cksum which does not include the sync characters at position 0 and 1
