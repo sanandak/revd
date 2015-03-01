@@ -1233,27 +1233,16 @@ PUB SWITCHED_ON(sleepPress, continuousPress, interval)
     return 1              ' if we are within 20 seconds of the interval minute
 
 ' has there been a button press?
-  case INA[REED_SWITCH]
-    PRESSED     : 
-      PAUSE_MS(1)  ' if it's pressed just wait a bit and return
-    NOT_PRESSED :  ' don't clear PHSA, that's handled in the main object
-      case PHSA
-        clkfreq>>4..clkfreq     : ' button pressed for .25-1 sec
-           return 2
-        4*clkfreq..8*clkfreq    : ' button pressed for 4-8 sec
-           return 3
+  repeat
+    PAUSE_MS(1)  ' if it's pressed just wait a bit and return
+  until INA[REED_SWITCH] == NOT_PRESSED
 
+  case PHSA
+    clkfreq>>4..sleepPress                 : 
+      return 2
+    continuousPress..continuousPress<<1    : 
+      return 3
 
-
-{  if INA[REED_SWITCH] == NOT_PRESSED   ' we can't make a decision until the button is no longer pressed
-    PAUSE_MS(10)
-    if INA[REED_SWITCH] == NOT_PRESSED ' if switch is STILL not pressed
-      case PHSA
-        clkfreq>>2..clkfreq     : ' button pressed for .25-1 sec
-           return 2
-        clkfreq<<2..clkfreq<<3  : ' button pressed for 4-8 sec
-           return 3
-}      
   return -1              ' otherwise it's not time to wake up so don't
 
 
@@ -1271,7 +1260,7 @@ PUB SWITCH_OFF(recordLength,second)
 
 PUB WAKE_UP
     ' indicate that we've caught the complete button press
-  'GUMSTIX_OFF ' we never fully turned off the gumstix only put it into powerdown mode; now turn it off
+  GUMSTIX_OFF ' we never fully turned off the gumstix only put it into powerdown mode; now turn it off
   LEDS_ON
   GUMSTIX_ON  ' now turn it back on
 
