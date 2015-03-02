@@ -176,6 +176,12 @@ CON ' main state machine states
   MY_TRUE  = 1
   MY_FALSE = 0
 
+CON ' menu states'
+  #0, MENU_NONE, MENU_PROMPT_TRIG, MENU_PROMPT_CONT, MENU_PROMPT_SHUT, MENU_CONFIRM, MENU_INFORM
+  MENU_TIMEOUT_TIME  = 5000 * ONE_MS  ' stay in a menu for this time before timing out'
+  MENU_ACTIVATE_TIME = 2000 * ONE_MS   ' button press of this time will move to next screen or confirm'
+  #0, PEBBLE_TRIG, PEBBLE_CONT, PEBBLE_SHUT ' possible requested states'
+
 CON ' EEPROM constants
   EEPROM_BASE      = $8000             ' set to 32,768 = 32k
   
@@ -208,7 +214,7 @@ DAT ' oled messages
   wakeMsg    byte   "Waking System.  ", 0
   magnetMsg  byte   "Wake with Magnet", 0
   euiMsg     byte   "SN:             ", 0
-  versionMsg byte   "Version 1.4.7   ", 0
+  versionMsg byte   "Version 2.0.0   ", 0
 
 OBJ                                  
   UARTS     : "FullDuplexSerial4portPlus_0v3"       '1 COG for 3 serial ports
@@ -224,6 +230,8 @@ VAR
   byte inUartBuf[UART_SIZE], inUartIdx, ptrIdx, uartState, inUartPtr[MAX_COMMANDS]
   byte oLedBuf[20] ' set aside some room for the oled 
   byte sramParms[64]
+
+  byte pebble_state, menu_state, pebble_state_requested
 
   word dacValue, dacNew, dacOld
   word rtcYear, rtcMonth, rtcDay, rtcDow, rtcHour, rtcMinute, rtcSecond
@@ -242,6 +250,8 @@ VAR
   long gpsDataToWrite, gpsBuffer[256]
   long slaveBufCMD, slaveBuffer[LONGS_IN_SLAVE_BUFFER]       
 
+  long menuPressTime ' time when the menu button was pressed - use for timeout'
+
   ' the next line refers to data read by the ADC and stored in the HUB; this is where data rest on their way to SRAM
   long fifoSem, blocksInFIFO, adcBuffer[BLOCKS_IN_BUFFER*LONGS_IN_BLOCK] ' this is a buffer that we fill from the ADC directly. Data are
                                                                          ' moved from the ADC cog to HUB then from HUB to the PASM Slave
@@ -259,9 +269,15 @@ PUB MAIN | idx, response, displayTime, pressType, flag, oldPhsa
   oldDay        := -1
   acqon         := FALSE
 
+  pebble_state  := PEBBLE_CONT
+  menu_state    := MENU_NONE
+
   PEBBLE.INIT
-  PEBBLE.GUMSTIX_OFF            ' no reason to have gumstix on yet.   
-  START_WATCHDOG
+
+  'FIXME - TESTING'
+  'sak commented out for testing ' PEBBLE.GUMSTIX_OFF            ' no reason to have gumstix on yet.   
+  
+  ' START_WATCHDOG
   LAUNCH_SERIAL_COG             ' handle the 2 serial ports- debug and GPS
 
   PEBBLE.LED1_ON
@@ -294,6 +310,8 @@ PUB MAIN | idx, response, displayTime, pressType, flag, oldPhsa
   PET_WATCHDOG
 
   TURN_ON_GPS
+  PEBBLE.OLED_WRITE_LINE1(string(" Turning on GPS "))
+
   waitcnt(displayTime += clkfreq<<1)
   GET_AND_PRINT_PARAMETERS
   PET_WATCHDOG
@@ -321,7 +339,8 @@ PUB MAIN | idx, response, displayTime, pressType, flag, oldPhsa
   PHSB~                                                 'from the rising edge of GPS
 
   GET_GPS_LOCK
-  PEBBLE.GUMSTIX_ON
+  'sak - why is the gumstix turned on here?'
+  'PEBBLE.GUMSTIX_ON
   PAUSE_MS(2000)
   UPDATE_TIME_AND_DATE
   PRINT_TIME_AND_DATE
@@ -341,17 +360,99 @@ PUB MAIN | idx, response, displayTime, pressType, flag, oldPhsa
   uartState := WAITING_FOR_START
 
 ' use the following three lines to boot into continuous mode.
-  'COME_OUT_OF_SLEEP(3)
-  'PHSA := 0               ' clear before moving to new state
-  'mainState := ACQUISITION_MODE
+  COME_OUT_OF_SLEEP(3)
+  PHSA := 0               ' clear before moving to new state
+  mainState := ACQUISITION_MODE
 
   DIRA[WAKEUP] := 1            ' set to output
+
+  menuPressTime := cnt
 
   repeat
     PET_WATCHDOG               ' do this every time through the loop.
 
-    if INA[REED_SWITCH] == PEBBLE#NOT_PRESSED
-      PHSA := 0
+    'if INA[REED_SWITCH] == PEBBLE#NOT_PRESSED
+    ''  PHSA := 0
+
+    ' normally display time (MENU_NONE), state 0
+    ' if swiped, display prompt to switch to state 1
+    '    if swiped in state 1, display prompt to switch to state 2, etc
+    '    in state N, switch back to state 0'
+    ' if in state 1 to N, and it times out, then display a confirm message'
+    ' if confirmed, then switch to that state'
+    case menu_state
+      MENU_NONE        :
+        if PHSA > MENU_ACTIVATE_TIME  'prompt the user (in DO_SOMETHING_USEFUL)'
+          menu_state := MENU_PROMPT_TRIG
+          menuPressTime := cnt
+          PHSA := 0
+          UARTS.STR(DEBUG, string(13, "In NONE -> TRIG"))
+          next
+      
+      MENU_PROMPT_TRIG : ' In xxxx --> TRIG'
+        if (cnt - menuPressTime) > MENU_TIMEOUT_TIME  'User wants this state... '
+          PHSA := 0
+          menu_state := MENU_CONFIRM
+          pebble_state_requested := PEBBLE_TRIG
+          menuPressTime := cnt
+          UARTS.STR(DEBUG, string(13, "In TRIG -> CONFIRM"))
+          next
+        if PHSA > MENU_ACTIVATE_TIME ' User pressed button during prompt - go on to next state'
+          PHSA := 0
+          menu_state := MENU_PROMPT_CONT
+          menuPressTime := cnt
+          UARTS.STR(DEBUG, string(13, "In TRIG -> CONT"))
+          next
+
+
+      MENU_PROMPT_CONT : ' In xxxx --> CONT'
+        if (cnt - menuPressTime) > MENU_TIMEOUT_TIME  'User wants this state... '
+          PHSA := 0
+          menu_state := MENU_CONFIRM
+          pebble_state_requested := PEBBLE_CONT
+          menuPressTime := cnt
+          UARTS.STR(DEBUG, string(13, "In CONT -> CONFIRM"))
+          next
+        if PHSA > MENU_ACTIVATE_TIME ' User pressed button during prompt - go to next state'
+          PHSA := 0
+          menu_state := MENU_PROMPT_SHUT
+          menuPressTime := cnt
+          UARTS.STR(DEBUG, string(13, "In CONT -> SHUT"))
+          next
+
+      MENU_PROMPT_SHUT : ' In xxxx --> SHUT'
+        if (cnt - menuPressTime) > MENU_TIMEOUT_TIME  'User wants this state... '
+          PHSA := 0
+          menu_state := MENU_CONFIRM
+          pebble_state_requested := PEBBLE_SHUT
+          menuPressTime := cnt
+          UARTS.STR(DEBUG, string(13, "In SHUT -> CONFIRM"))
+          next
+        if PHSA > MENU_ACTIVATE_TIME ' User pressed button during prompt - go to next state'
+          PHSA := 0
+          pebble_state_requested := pebble_state
+          menuPressTime := cnt
+          menu_state := MENU_NONE
+          UARTS.STR(DEBUG, string(13, "In SHUT -> NONE"))
+          next
+
+      MENU_CONFIRM     : ' To xxxx: Confirm!'
+        if (cnt - menuPressTime) > MENU_TIMEOUT_TIME
+          PHSA := 0
+          menu_state := MENU_NONE
+          UARTS.STR(DEBUG, string(13, "In CONFIRM -> NONE"))
+          next
+
+        if PHSA > MENU_ACTIVATE_TIME
+          PHSA := 0
+          menu_state := MENU_INFORM
+          pebble_state := pebble_state_requested
+          next
+
+      MENU_INFORM      : ' inform the user of their choice'
+        if (cnt - menuPressTime) > MENU_TIMEOUT_TIME
+          PHSA := 0
+          menu_state := MENU_NONE
 
     case mainState
       SLEEP             :
@@ -389,13 +490,14 @@ PUB MAIN | idx, response, displayTime, pressType, flag, oldPhsa
         DO_SOMETHING_USEFUL
 
         ' now check to see if we should sleep or not
+        {{
         if (PHSA > SLEEP_PRESS_CNT) AND (PHSA < PROGRAM_TIMEOUT_CNT) AND (INA[REED_SWITCH] == PEBBLE#NOT_PRESSED)        ' was it pressed for more than 5 seconds?  
           UARTS.STR(DEBUG, string(13, "Sleep case: button pressed: "))
           UARTS.DEC(DEBUG, PHSA)
           recordLength := 10
           mainState := SLEEP
           PHSA := 0               ' clear before moving to new state
-            
+        }}   
 
         if  rtcSecond == recordLength  AND recordLength <> 0
           UARTS.STR(DEBUG, string(13, "Sleep case: end of record "))
@@ -714,7 +816,8 @@ PUB START_ACQUISITION
   UARTS.STR(DEBUG, string(13, "$PSMSG, Powering Analog Section."))  
   PEBBLE.ANALOG_ON
   UARTS.STR(DEBUG, string(13, "$PSMSG, Powering GumStix."))
-  PEBBLE.GUMSTIX_OFF
+  
+  'sak FIXME PEBBLE.GUMSTIX_OFF
   PAUSE_MS(100)
   PEBBLE.GUMSTIX_ON
 
@@ -796,7 +899,40 @@ PUB DO_SOMETHING_USEFUL | rxByte, response, idx
     %01 : ' rising edge -> grab phsb
       cntsTemp := CNT - PHSB
       UPDATE_TIME_AND_DATE                   ' KEEP IN MIND WE ALWAYS UPDATE TIME/DATE ON THE PPS following OUR MESSAGE SO WE ARE BEHIND ONE SECOND
-      PRINT_TIME_AND_DATE
+      
+      case menu_state
+        MENU_NONE        :
+          PRINT_TIME_AND_DATE
+        MENU_PROMPT_TRIG :
+          PEBBLE.OLED_WRITE_LINE1(string("WAIT->TRIGGERED "))
+          PEBBLE.OLED_WRITE_LINE2(string("SWIPE-->MORE OPT"))
+        MENU_PROMPT_CONT :
+          PEBBLE.OLED_WRITE_LINE1(string("WAIT->CONTINUOUS"))
+          PEBBLE.OLED_WRITE_LINE2(string("SWIPE-->MORE OPT"))
+        MENU_PROMPT_SHUT :
+          PEBBLE.OLED_WRITE_LINE1(string("WAIT->SHUTDOWN  "))
+          PEBBLE.OLED_WRITE_LINE2(string("SWIPE-->MORE OPT"))
+        MENU_CONFIRM     :
+          if pebble_state_requested == PEBBLE_TRIG
+            PEBBLE.OLED_WRITE_LINE1(string("SWITCH TO TRIG? "))
+            PEBBLE.OLED_WRITE_LINE2(string("SWIPE TO CONFIRM"))
+          if pebble_state_requested == PEBBLE_CONT
+            PEBBLE.OLED_WRITE_LINE1(string("SWITCH TO CONT? "))
+            PEBBLE.OLED_WRITE_LINE2(string("SWIPE TO CONFIRM"))
+          if pebble_state_requested == PEBBLE_SHUT
+            PEBBLE.OLED_WRITE_LINE1(string("SWITCH TO SHUT? "))
+            PEBBLE.OLED_WRITE_LINE2(string("SWIPE TO CONFIRM"))
+        MENU_INFORM      :
+          if pebble_state_requested == PEBBLE_TRIG
+            PEBBLE.OLED_WRITE_LINE1(string("SWITCHING TO    "))
+            PEBBLE.OLED_WRITE_LINE2(string("TRIGGERED MODE  "))
+          if pebble_state_requested == PEBBLE_CONT
+            PEBBLE.OLED_WRITE_LINE1(string("SWITCHING TO    "))
+            PEBBLE.OLED_WRITE_LINE2(string("CONTINUOUS MODE "))
+          if pebble_state_requested == PEBBLE_SHUT
+            PEBBLE.OLED_WRITE_LINE1(string("SWITCHING TO    "))
+            PEBBLE.OLED_WRITE_LINE2(string("SHUTDOWN        "))
+
     %10 : ' falling edge now we can reset phsb since it won't increment until PPS goes high again
       PHSB := 0
 
@@ -1482,8 +1618,12 @@ PUB TURN_ON_GPS
   ' we need some amount of delay between turning on the gps and speaking to it.  
   PAUSE_MS(100)
   UBX.VERSION_POLL
+  PEBBLE.OLED_WRITE_LINE2(string("Turning OFF NMEA"))
+
   UBX.TURN_OFF_NMEA
+  PEBBLE.OLED_WRITE_LINE2(string("Turning ON UBX  "))
   UBX.TURN_ON_RAW
+  PEBBLE.OLED_WRITE_LINE2(string("Turning ON 1PPS "))
   UBX.TURN_ON_PPS
 
 PUB REBOOT_SYSTEM
