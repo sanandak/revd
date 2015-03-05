@@ -272,7 +272,6 @@ VAR
   byte rtcSram[64]   ' 64-byte SRAM storage
   byte mag[6]
   byte rtcTime[7]
-  
 DAT ' characters for OLED
 PLOT_1 byte   %000_11111 
        byte   %000_11111
@@ -331,7 +330,6 @@ PLOT_6 byte   %000_00000
               
 PUB INIT : response
   DIRA~ ' set everything to input
-
 ' setup the I2C bus
   I2C.INIT(SDA, SCL)
 ' setup the initial values for the I2C expanders and deploy those values
@@ -353,6 +351,7 @@ PUB SET_EXP2_VAL(newValue)
   EXPANDER_WRITE(EXPANDER_2, expVal2)
   return expVal2
 }  
+
 PUB SLEEP(mainCogId, watchDogCogId) | i
 
 ' Turn off everything we can
@@ -467,8 +466,8 @@ PUB SET_EXPANDER_TO_LOW_POWER : response
 ' EXP_1 : PGA_D_CS | PGA_C_CS | PGA_B_CS | PGA_A_CS | MUX2SEL_3-4 | MUX2SEL_1-2 | MUX1SEL_3-4 | MUX1SEL_1-2
   expVal1 := PGA_D_CS | PGA_C_CS | PGA_B_CS | PGA_A_CS | %0000
 
-' EXP_2 : GPS_RESET | MAG_ACC_EN | OLED_EN | UBLOX_EN | WIFI_EN | 5V_ENABLE | LED1003 | LED1002     
-  expVal2 := %00001011  ' turn components OFF and turn LEDS OFF (high)
+' EXP_2 : GPS_RESET | MAG_ACC_EN | OLED_EN | UBLOX_EN | GUMSTIX_EN | 5V_ENABLE | LED1003 | LED1002     
+  expVal2 := %00000011  ' turn components OFF and turn LEDS OFF (high)
 
   EXPANDER_WRITE(EXPANDER_1, expVal1)
   EXPANDER_WRITE(EXPANDER_2, expVal2)
@@ -877,7 +876,8 @@ PUB READ_EUI
   
   return @eui_48
 
-PUB READ_RTC_SRAM | idx 
+PUB READ_RTC_SRAM | idx
+' method that reads all the bytes from SRAM and stores them locally @rtcSram
   I2C.START
   I2C.WRITE(RTC_ADDR|I2C_WRITE)
   I2C.WRITE(RTC_SRAM_BASE)
