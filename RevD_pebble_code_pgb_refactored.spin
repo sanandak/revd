@@ -195,7 +195,7 @@ CON ' Reed Switch constants
   
 DAT ' oled messages
   sleepMsg   byte   "Sleeping System.", 0
-  awakeMsg   byte   "System Ready .  ", 0
+  awakeMsg   byte   "System Ready.   ", 0
   magnetMsg  byte   "Wake with Magnet", 0
   euiMsg     byte   "SN:             ", 0
   versionMsg byte   "Version 2.0.1   ", 0
@@ -259,42 +259,45 @@ PUB MAIN | idx, response,  pressType, bPressed
   mainCogId     := cogid
   watchDogCogId := -1
   START_WATCHDOG
+  DIRA[WAKEUP] := 1
+  OUTA[WAKEUP] := 0
 
   mainState := TURNING_ON
+  'mainState := OFF
   
   repeat
 
     PET_WATCHDOG                 ' do this every time through the loop.
     bPressed := BUTTON_PRESSED   ' check for button press
 
+
     case mainState
       OFF  :
         if bPressed
           mainState := TURNING_ON
         else
+          !OUTA[WAKEUP]
           PAUSE_MS(10)
-  
   
       TURNING_ON :
         TURN_SYSTEM_ON
         case acqMode
           OFF  :
-                 mainState := TURNING_OFF
-                 UARTS.STR(DEBUG, string(13, "Leaving for turning off"))
+            mainState := TURNING_OFF
+            UARTS.STR(DEBUG, string(13, "Leaving for turning off"))
           TRIG :
-                 UARTS.STR(DEBUG, string(13, "Leaving for triggered"))
-                 START_ACQUISITION
-                 mainState := ON
+            UARTS.STR(DEBUG, string(13, "Leaving for triggered"))
+            START_ACQUISITION
+            mainState := ON
           CONT :
-                 START_ACQUISITION
-                 mainState := ON
+            START_ACQUISITION
+            mainState := ON
 
       ON:
         DO_SOMETHING_USEFUL
         if bPressed
           TURN_SYSTEM_OFF
           mainState := OFF
-          
         
       TURNING_OFF :
         TURN_SYSTEM_OFF
@@ -308,8 +311,7 @@ PUB TURN_SYSTEM_ON | displayTime
   adcCogId      := -1
   slaveCogId    := -1
 
-  PEBBLE.INIT                   ' when we wakeup gumstix should be off
-  PEBBLE.LEDS_ON                ' turn on the LEDs to indicate we are awake
+  PEBBLE.I2C_INIT               ' when we wakeup gumstix should be off
   PEBBLE.OLED_ON                ' turn on and init oled
   PEBBLE.GUMSTIX_ON             ' sak preferes to have gumstix on right away
   PEBBLE.GPS_ON
@@ -334,11 +336,7 @@ PUB TURN_SYSTEM_ON | displayTime
   PET_WATCHDOG
   waitcnt(displayTime += clkfreq<<1)
 
-  UARTS.STR(DEBUG, string(13, "$PSMSG, "))
-  UARTS.STR(DEBUG, @versionMsg)
-  PEBBLE.OLED_WRITE_LINE1(@versionMsg)
   PET_WATCHDOG
-  waitcnt(displayTime += clkfreq<<1)
 
   clockSetYet := FALSE          ' when we first boot we have no idea what the lock status is/was
   PEBBLE.OLED_WRITE_LINE1(string("Getting GPS Lock"))
@@ -349,7 +347,7 @@ PUB TURN_SYSTEM_ON | displayTime
 
   CTRB[30..26] := %01000                                'ctrb module to POS detector;                                                        
   CTRB[5..0]   := GPS_PPS                               'add frqb to phsb every clock cycle that GPS_PPS high
-  FRQB:= 1                                              'this will keep track of the number of system counts
+  FRQB := 1                                              'this will keep track of the number of system counts
   PHSB~                                                 'from the rising edge of GPS
 
   PEBBLE.LEDS_OFF                ' turn on the LEDs to indicate we are awake
@@ -373,8 +371,10 @@ PUB TURN_SYSTEM_ON | displayTime
   PAUSE_MS(200)
   PEBBLE.OLED_WRITE_LINE1(@awakeMsg)
   PEBBLE.OLED_WRITE_LINE2(@versionMsg)
+  UARTS.STR(DEBUG, string(13, "$PSMSG, "))
+  UARTS.STR(DEBUG, @versionMsg)
 
-PUB TURN_SYSTEM_OFF
+PUB TURN_SYSTEM_OFF | i
   UARTS.STR(DEBUG, string(13, "$PSMSG. Sleeping system.  Use magnet to wake or wait for trigger."))
   repeat 3   ' why is this hear?
     UARTS.STR(DEBUG, string(13, "$PSMSG. SHUTDOWN"))
@@ -382,16 +382,19 @@ PUB TURN_SYSTEM_OFF
   PEBBLE.OLED_WRITE_LINE2(@magnetMsg)
   DIRA[SLAVE_IRQ] := 1         ' raise IRQ line so gumstix doesn't keep acquiring
   OUTA[SLAVE_IRQ] := 1
+  PAUSE_MS(4_000)
+
+  PET_WATCHDOG
+  PEBBLE.OLED_OFF
   PAUSE_MS(5_000)
 
-  cogstop(adcCogId)
-  adcCogId := -1
+  repeat i from 0 to 7
+    if i <> mainCogId  AND i <> watchDogCogId
+      cogstop(i)
 
-  cogstop(serialCogId)
-  serialCogId   := -1
-  
-  cogstop(slaveCogId)
-  slaveCogId    := -1
+  adcCogId    := -1
+  serialCogId := -1
+  slaveCogId  := -1
 
   lockret(fifoSem)                               ' 
   lockret(gpsSem)                               '
@@ -525,30 +528,31 @@ PUB DO_SOMETHING_USEFUL | rxByte, response, idx
   ' this should follow the same setup as the ublox I think
    rxByte := uarts.rxcheck(DEBUG)       ' collect byte from DEBUG port
    case uartState
-      WAITING_FOR_START      :   if rxByte == "$"                     ' beginning of a new string
-                                   inUartIdx := 0
-                                   ptrIdx    := 0
-                                   bytefill(@inUartIdx, 0, UART_SIZE) ' buffer for all incoming bytes
-                                   bytefill(@inUartPtr, 0, MAX_COMMANDS) ' contains the index of each field 
-                                   uartState := WAITING_FOR_END
+      WAITING_FOR_START :
+        if rxByte == "$"                     ' beginning of a new string
+          inUartIdx := 0
+          ptrIdx    := 0
+          bytefill(@inUartIdx, 0, UART_SIZE) ' buffer for all incoming bytes
+          bytefill(@inUartPtr, 0, MAX_COMMANDS) ' contains the index of each field 
+          uartState := WAITING_FOR_END
 
-      WAITING_FOR_END        :   if rxByte <> -1
-                                   case rxByte
-                                     ","    :
-                                       inUartBuf[inUartIdx++ <# UART_SIZE] := 0          ' zero terminate strings
-                                       inUartPtr[++ptrIdx] := inUartIdx <# MAX_COMMANDS
-                                       uartState := WAITING_FOR_END
-                                     "%"   :
-                                       inUartBuf[inUartIdx++ <# UART_SIZE] := 0 ' <-- ADD THIS zero terminate string
-                                       uartState := PROCESS_BUFFER
-                                     OTHER : 
-                                       inUartBuf[inUartIdx++ <# UART_SIZE] := rxByte     ' if not, keep adding to it
-                                       uartState := WAITING_FOR_END
+      WAITING_FOR_END   :
+        if rxByte <> -1
+          case rxByte
+            ","    :
+              inUartBuf[inUartIdx++ <# UART_SIZE] := 0          ' zero terminate strings
+              inUartPtr[++ptrIdx] := inUartIdx <# MAX_COMMANDS
+              uartState := WAITING_FOR_END
+            "%"   :
+              inUartBuf[inUartIdx++ <# UART_SIZE] := 0 ' <-- ADD THIS zero terminate string
+              uartState := PROCESS_BUFFER
+            OTHER : 
+              inUartBuf[inUartIdx++ <# UART_SIZE] := rxByte     ' if not, keep adding to it
+              uartState := WAITING_FOR_END
 
-     PROCESS_BUFFER          :   OUTA[WAKEUP] := 1
-                                 PROCESS_UART
-                                 OUTA[WAKEUP] := 0
-                                 uartState := WAITING_FOR_START
+     PROCESS_BUFFER     :
+       PROCESS_UART
+       uartState := WAITING_FOR_START
     
      
   edgeDetector := ((edgeDetector << 1) | INA[GPS_PPS] ) & %11    
@@ -874,7 +878,7 @@ PUB PROCESS_UART | idx, pkpA, pkpB, pkpC, cursor
     SHUTDOWN_SYSTEM :      'D
       UARTS.STR(DEBUG, string(13,"$PSCMD, SHUTDOWN"))
       PAUSE_MS(12_000)
-'      acqMode := SHUTDOWN
+'      mainState := TURNING_OFF
 
     SOFT_REBOOT_GUMSTIX :  'S
       UARTS.STR(DEBUG, string(13,"$PSCMD, REBOOT"))
@@ -981,14 +985,16 @@ PUB PROCESS_UART | idx, pkpA, pkpB, pkpC, cursor
           cursor |= %001
         PEBBLE.OLED_DATA(cursor)
 
-    LINE_TWO :        '2
+'      if second // 2 == 1
+'        PEBBLE.OLED_WRITE_LINE2(string("Hello |         "))
+'      else
+'        PEBBLE.OLED_WRITE_LINE2(string("Hello -         "))
+
+{    LINE_TWO :        '2
         inUartBuf[2+16] := 0                    ' make sure that we have a zero-terminated string that won't exceed OLED length
         PEBBLE.OLED_WRITE_LINE2(string("                "))  ' clear the line before writing to it.
         PEBBLE.OLED_WRITE_LINE2(@inUartBuf[inUartPtr[1]])    ' print the message  
-                                               '  
-      'UARTS.STR(DEBUG, string(" Write to OLED: "))
-      'UARTS.STR(DEBUG, @inUartBuf[2])
-      'UARTS.PUTC(DEBUG, CR)
+}                                               '  
     OTHER: 
       UARTS.STR(DEBUG, string(" Unrecognized command."))
 
@@ -1540,8 +1546,8 @@ PUB TEST_RTC | setDow, setYear, setMon, setDay, setHour, setMin, setSec
 
 }
 
-{      WAIT_FOR_WAKE_UP  :
-        PEBBLE.WAIT_FOR_WAKE_UP               ' this calls forces system to block until button pressed
+{      WAIT_FOR_WAKEUP  :
+        PEBBLE.WAIT_FOR_WAKEUP               ' this calls forces system to block until button pressed
         LAUNCH_SERIAL_COG                     ' handle the 2 serial ports- debug, and GPS
         PAUSE_MS(200)
         UARTS.STR(DEBUG, string(13, "System booted and ready for action.",13))
