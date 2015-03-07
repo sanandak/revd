@@ -262,6 +262,11 @@ PUB MAIN | idx, response,  pressType, bPressed
   DIRA[WAKEUP] := 1
   OUTA[WAKEUP] := 0
 
+  ' sak put this here for those boards that have never been touched...
+  ' without this, acqMode isn't set properly.
+  
+  WRITE_DEFAULT_PARAMS_TO_SRAM
+
   mainState := TURNING_ON
   'mainState := OFF
   
@@ -323,7 +328,6 @@ PUB TURN_SYSTEM_ON | displayTime
   PAUSE_MS(1_000)
   UARTS.STR(DEBUG, string(13, "$PSMSG, Waking system."))
 
-  'WRITE_DEFAULT_PARAMS_TO_SRAM
   GET_AND_PRINT_PARAMETERS
   PET_WATCHDOG
 
