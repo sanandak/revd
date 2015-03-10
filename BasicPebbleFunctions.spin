@@ -328,12 +328,12 @@ PLOT_6 byte   %000_00000
        byte   %000_11111
               
               
-PUB I2C_INIT : response
-'  DIRA~ ' set everything to input
+PUB INIT : response
+  DIRA~ ' set everything to input
 ' setup the I2C bus
   I2C.INIT(SDA, SCL)
 ' setup the initial values for the I2C expanders and deploy those values
- ' SET_EXPANDER_TO_LOW_POWER
+  SET_EXPANDER_TO_LOW_POWER
 
 {PUB RETURN_EXP1
   return expVal1
@@ -476,21 +476,22 @@ PUB SET_EXPANDER_TO_LOW_POWER : response
   DIRA[SRAM_CS]  := 1           ' hold SRAM in RESET
   OUTA[SRAM_CS]  := 1           ' hold SRAM in RESET
 
-' oled is not powered so make OLED_CS an input
-  DIRA[OLED_CS]  := 0           ' set as input
-
-' DAC is still powered so make sure we hold this line high
-  DIRA[DAC_CS]   := 1           ' set as out
-  OUTA[DAC_CS]   := 1           ' hold line high
-  
 ' setup the shared SPI
   'DIRA[RADIO_CS] := 1
+  DIRA[OLED_CS]  := 1
+  DIRA[DAC_CS]   := 1
+  
   'OUTA[RADIO_CS] := 1
+  OUTA[OLED_CS]  := 0           ' current appears to leak from this device.  Since it's powered off don't worry about CS lineS
+  OUTA[DAC_CS]   := 1
 
-' set these lines to inputs
-  DIRA[SHARED_MOSI] := 0        ' set as input
-  DIRA[SHARED_MISO] := 0        ' set as input
-  DIRA[SHARED_SCLK] := 0        ' set as input
+  DIRA[SHARED_MOSI] := 1
+  OUTA[SHARED_MOSI] := 0
+
+  DIRA[SHARED_MISO] := 0
+  
+  DIRA[SHARED_SCLK] := 1
+  OUTA[SHARED_SCLK] := 0
 
 PUB LEDS_ON
 ' turn the LEDS on the I2C expander ON by setting the bits LOW
@@ -586,25 +587,28 @@ PUB MAG_ACC_OFF
 '  WRITE_TO_OLED(0, 1, string("MAG/ACC OFF     "))
 
 PUB OLED_ON
-' setup the shared SPI pins
-  OUTA[SHARED_MOSI] := 0
+' Turn on the switch that allows 3.3V power to pass to the OLED
+  expVal2 |= OLED_EN  ' and turn on  OLED
+  expVal2 |= EN_5V   ' raise the 5V line
+  EXPANDER_WRITE(EXPANDER_2, expVal2)
+
+' setup the shared SPI
+  'DIRA[RADIO_CS] := 1
+  DIRA[OLED_CS]  := 1
+  DIRA[DAC_CS]   := 1
+  
+  'OUTA[RADIO_CS] := 1
+  OUTA[OLED_CS]  := 1           ' current appears to leak from this device.  Since it's powered off don't worry about CS lineS
+  OUTA[DAC_CS]   := 1
+
   DIRA[SHARED_MOSI] := 1
+  OUTA[SHARED_MOSI] := 0
 
   DIRA[SHARED_MISO] := 0
   
-  OUTA[SHARED_SCLK] := 0       
   DIRA[SHARED_SCLK] := 1
+  OUTA[SHARED_SCLK] := 1       ' this is set to 1 and I'm not sure why; just testing it
 
-  ' setup the OLED_CS pin to output and high
-  DIRA[OLED_CS]  := 1
-  OUTA[OLED_CS]  := 1
-  
-' Turn on the switch that allows 3.3V power to pass to the OLED
-  expVal2 |= OLED_EN  ' and turn on  OLED
-  expVal2 |= EN_5V    ' raise the 5V line
-  EXPANDER_WRITE(EXPANDER_2, expVal2)
-
-  PAUSE_MS(1000)
   OLED_INIT
 
 PUB OLED_INIT
@@ -777,58 +781,56 @@ PUB SHIFT_OUT_TO_OLED(dataOut)
 '// 10 bits of data must be clocked into the display.
 
   dataOut ><= 10             ' reverse the lowest 10 bits
-  OUTA[SHARED_SCLK] := 0                         ' drop clock
-  OUTA[SHARED_MOSI] := (dataOut & %01)           ' place next bit on MOSI
-  dataOut >>= 1
-  OUTA[SHARED_SCLK] := 1                         ' raise clock
+'  repeat 10                 ' unrolled this loop to speed it up a bit
+    OUTA[SHARED_SCLK] := 0                         ' drop clock
+    OUTA[SHARED_MOSI] := (dataOut & %01)           ' place next bit on MOSI
+    dataOut >>= 1
+    OUTA[SHARED_SCLK] := 1                         ' raise clock
 
-  OUTA[SHARED_SCLK] := 0                         ' drop clock
-  OUTA[SHARED_MOSI] := (dataOut & %01)           ' place next bit on MOSI
-  dataOut >>= 1
-  OUTA[SHARED_SCLK] := 1                         ' raise clock
+    OUTA[SHARED_SCLK] := 0                         ' drop clock
+    OUTA[SHARED_MOSI] := (dataOut & %01)           ' place next bit on MOSI
+    dataOut >>= 1
+    OUTA[SHARED_SCLK] := 1                         ' raise clock
 
-  OUTA[SHARED_SCLK] := 0                         ' drop clock
-  OUTA[SHARED_MOSI] := (dataOut & %01)           ' place next bit on MOSI
-  dataOut >>= 1
-  OUTA[SHARED_SCLK] := 1                         ' raise clock
+    OUTA[SHARED_SCLK] := 0                         ' drop clock
+    OUTA[SHARED_MOSI] := (dataOut & %01)           ' place next bit on MOSI
+    dataOut >>= 1
+    OUTA[SHARED_SCLK] := 1                         ' raise clock
 
-  OUTA[SHARED_SCLK] := 0                         ' drop clock
-  OUTA[SHARED_MOSI] := (dataOut & %01)           ' place next bit on MOSI
-  dataOut >>= 1
-  OUTA[SHARED_SCLK] := 1                         ' raise clock
+    OUTA[SHARED_SCLK] := 0                         ' drop clock
+    OUTA[SHARED_MOSI] := (dataOut & %01)           ' place next bit on MOSI
+    dataOut >>= 1
+    OUTA[SHARED_SCLK] := 1                         ' raise clock
 
-  OUTA[SHARED_SCLK] := 0                         ' drop clock
-  OUTA[SHARED_MOSI] := (dataOut & %01)           ' place next bit on MOSI
-  dataOut >>= 1
-  OUTA[SHARED_SCLK] := 1                         ' raise clock
+    OUTA[SHARED_SCLK] := 0                         ' drop clock
+    OUTA[SHARED_MOSI] := (dataOut & %01)           ' place next bit on MOSI
+    dataOut >>= 1
+    OUTA[SHARED_SCLK] := 1                         ' raise clock
 
-  OUTA[SHARED_SCLK] := 0                         ' drop clock
-  OUTA[SHARED_MOSI] := (dataOut & %01)           ' place next bit on MOSI
-  dataOut >>= 1
-  OUTA[SHARED_SCLK] := 1                         ' raise clock
+    OUTA[SHARED_SCLK] := 0                         ' drop clock
+    OUTA[SHARED_MOSI] := (dataOut & %01)           ' place next bit on MOSI
+    dataOut >>= 1
+    OUTA[SHARED_SCLK] := 1                         ' raise clock
 
-  OUTA[SHARED_SCLK] := 0                         ' drop clock
-  OUTA[SHARED_MOSI] := (dataOut & %01)           ' place next bit on MOSI
-  dataOut >>= 1
-  OUTA[SHARED_SCLK] := 1                         ' raise clock
+    OUTA[SHARED_SCLK] := 0                         ' drop clock
+    OUTA[SHARED_MOSI] := (dataOut & %01)           ' place next bit on MOSI
+    dataOut >>= 1
+    OUTA[SHARED_SCLK] := 1                         ' raise clock
 
-  OUTA[SHARED_SCLK] := 0                         ' drop clock
-  OUTA[SHARED_MOSI] := (dataOut & %01)           ' place next bit on MOSI
-  dataOut >>= 1
-  OUTA[SHARED_SCLK] := 1                         ' raise clock
+    OUTA[SHARED_SCLK] := 0                         ' drop clock
+    OUTA[SHARED_MOSI] := (dataOut & %01)           ' place next bit on MOSI
+    dataOut >>= 1
+    OUTA[SHARED_SCLK] := 1                         ' raise clock
 
-  OUTA[SHARED_SCLK] := 0                         ' drop clock
-  OUTA[SHARED_MOSI] := (dataOut & %01)           ' place next bit on MOSI
-  dataOut >>= 1
-  OUTA[SHARED_SCLK] := 1                         ' raise clock
+    OUTA[SHARED_SCLK] := 0                         ' drop clock
+    OUTA[SHARED_MOSI] := (dataOut & %01)           ' place next bit on MOSI
+    dataOut >>= 1
+    OUTA[SHARED_SCLK] := 1                         ' raise clock
 
-  OUTA[SHARED_SCLK] := 0                         ' drop clock
-  OUTA[SHARED_MOSI] := (dataOut & %01)           ' place next bit on MOSI
-  dataOut >>= 1
-  OUTA[SHARED_SCLK] := 1                         ' raise clock
-
-  OUTA[SHARED_SCLK] := 0                         ' leave clock low on exit
-  OUTA[SHARED_MOSI] := 0                         ' leave MOSI low on exit
+    OUTA[SHARED_SCLK] := 0                         ' drop clock
+    OUTA[SHARED_MOSI] := (dataOut & %01)           ' place next bit on MOSI
+    dataOut >>= 1
+    OUTA[SHARED_SCLK] := 1                         ' raise clock
 
 PUB OLED_OFF
 ' Turn off the switch that allows 3.3V power to pass to the OLED
@@ -836,8 +838,7 @@ PUB OLED_OFF
   expVal2 &= !EN_5V   ' raise the 5V line
   EXPANDER_WRITE(EXPANDER_2, expVal2)
   OUTA[OLED_CS] := 0   ' lower this so we aren't powering the oled from the prop
-  DIRA[OLED_CS] := 0   ' make this an input
-  
+
 PUB SET_MUXES(chanA, chanB, chanC, chanD) | muxVal
 ' method that sets the muxes to internal or external for each of the 4 channels in one sweep
 ' values passed in should be either 0 or 1 0 for internal and 1 for external
@@ -935,11 +936,13 @@ PUB SET_RTC_TIME(year, month, day, hour, minute, second, wkday)
   I2C.STOP
 
 PUB CONVERT_TO_BCD(number) : bcdValue
+
   number &= $FF        ' limit this number to a single byte
   bcdValue := ((number/10) << 4)
   bcdValue |= number//10
 
 PUB CONVERT_FROM_BCD(bcdValue) : number
+
   number := (bcdValue >> 4)*10
   number += bcdValue & $0F
 
@@ -963,6 +966,7 @@ PUB READ_EEPROM_LONG(startAddress) | eepromData
   ' read long
   return I2C.READ_LONG(EEPROM_ADDR, startAddress)
 
+
 PUB WRITE_EEPROM_LONG(startAddress, val)
   I2C.WRITE_LONG(EEPROM_ADDR, startAddress, val)
   
@@ -983,6 +987,113 @@ PUB WRITE_TO_DAC(newDacValue)| dacCode
 
   OUTA[DAC_CS]  := 1                                    ' raise CS line
 
+{PUB WRITE_TO_OLED(x, y, stringAddress)
+  OLED_GOTO_XY(x, y)
+  OLED_WRITE_STRING(stringAddress)  
+}
+{PRI OLED_GOTO_XY(xPos, yPos) | position
+'' method to position cursor
+'' treats top line (upper most) as line ypos=1, lower line is ypos=2
+'' far left of display is xpos=0; far right is xpos=15
+  position := xPos & $0F ' xpositin is lower nibble and should be between $00-$0F
+  
+  if yPos == 2
+    position |= $40 ' second line is indicated by $4 in the upper nibble
+    
+  position |= $80   ' make sure DB7 is high so this will be seen as a set DDRAM Address command
+  OLED_WRITE_COMMAND(position)
+}
+{PUB OLED_WRITE_COMMAND(dataOut) | dataIn
+' clock out 10 data bits
+  dataIn := 0
+
+  ' lower CS line
+  OUTA[OLED_CS]     := 0                                    ' lower CS line
+
+  ' RS bit; there is no valid data on input during RS bit during first instruction
+  OUTA[SHARED_SCLK] := 0                                    ' drop clock
+  OUTA[SHARED_MOSI] := 0                                    ' place zero bit on MOSI
+  OUTA[SHARED_SCLK] := 1                                    ' raise clock
+     
+  ' RW bit; there is no valid data on input during RW bit during first instruction
+  OUTA[SHARED_SCLK] := 0                                    ' drop clock
+  OUTA[SHARED_MOSI] := 0                                    ' place zero bit on MOSI
+  OUTA[SHARED_SCLK] := 1                                    ' raise clock
+
+
+  ' now get into the data portion of the Instructions (the lower 8 bits)
+  dataOut ><= 8           ' reverse the lower 8 bits
+  repeat 8
+    OUTA[SHARED_SCLK] := 0                                    ' drop clock
+    OUTA[SHARED_MOSI] := (dataOut & %01)                      ' place next bit on MOSI
+    dataOut >>= 1
+    dataIn := (dataIn << 1) + INA[SHARED_MISO]              ' now read next bit from MISO
+    OUTA[SHARED_SCLK] := 1                                    ' raise clock
+     
+     
+  ' set clock and MOSI to LOW on exit
+  OUTA[SHARED_MOSI] := 0
+  OUTA[SHARED_SCLK] := 0
+
+  ' raise CS on exit
+  OUTA[OLED_CS]     := 1                                    ' raise CS line
+  
+  ' at this point, the data have been written and read, return result
+  return ( dataIn )            
+}
+{PRI OLED_WRITE_STRING(stringPtr)
+  OLED_INIT
+  repeat strsize(stringPtr)
+    OLED_WRITE_DATA(byte[stringPtr++])
+
+  OUTA[OLED_CS]  := 1                                    ' raise CS line
+}
+{PUB OLED_INIT 
+{{
+
+}}
+  ' lower CS line
+  OUTA[OLED_CS]  := 0                                    ' lower CS line
+
+  ' RS bit; there is no valid data on input during RS bit
+  OUTA[SHARED_SCLK] := 0                                    ' drop clock
+  OUTA[SHARED_MOSI] := 1                                    ' place 1 on MOSI
+  OUTA[SHARED_SCLK] := 1                                    ' raise clock
+     
+  ' RW bit; there is no valid data on input during RW bit
+  OUTA[SHARED_SCLK] := 0                                    ' drop clock
+  OUTA[SHARED_MOSI] := 0                                    ' place 0 on MOSI
+  OUTA[SHARED_SCLK] := 1                                    ' raise clock
+}
+{PUB OLED_WRITE_DATA(dataOut) | dataIn
+{{
+DESCRIPTION: This method reads data from the SPI lines while writing (a bit at a time)
+(SPI is a circular buffer protocal), This is an optimized 8-bit read/write
+specific to this LCD
+
+PARMS:
+
+dataOut : source of data to transmit
+
+RETURNS: data retrieved from SPI transmission
+
+}}
+  ' clear result
+  dataIn := 0
+
+  ' now get into the data portion of the Instructions (the lower 8 bits)
+  dataOut ><= 8           ' reverse the lower 8 bits
+  repeat 8
+    OUTA[SHARED_SCLK] := 0                                    ' drop clock
+    OUTA[SHARED_MOSI] := (dataOut & %01)                      ' place next bit on MOSI
+    dataOut >>= 1
+    dataIn := (dataIn << 1) + INA[SHARED_MISO]              ' now read next bit from MISO
+    OUTA[SHARED_SCLK] := 1                                    ' raise clock
+
+  ' set clock and MOSI to LOW on exit
+  OUTA[SHARED_MOSI] := 0
+  OUTA[SHARED_SCLK] := 0
+}
 
 PUB LSM_INIT | lsmPresent
   lsmPresent := 0
@@ -1103,7 +1214,7 @@ PUB WAIT_FOR_TIME(modValue)
   
   '_rc_to_fast_prop
   _slow_to_fast_prop
-  I2C_INIT
+  INIT
   OLED_ON
   OLED_WRITE_LINE1(string("Waking System."))
 
