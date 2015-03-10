@@ -324,6 +324,7 @@ PUB TURN_OFF_NMEA | _pkt, nTry, idx
 '  uarts.putc(debug, 13)
 
 PUB TURN_ON_RAW | _pkt, nTry, idx
+  nTry:=0
   UARTS.STR(DEBUG, string(13, "$PSMSG, GPS RAW ON"))
   ' turn on POSLLH
   CFG_MSG[6] := $01

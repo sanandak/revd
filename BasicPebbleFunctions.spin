@@ -5,8 +5,8 @@
 
 
 CON ' I2C expander constants
-  EXPANDER_1    = %0111_111_0   ' bits 7-4 are taken from Datasheet; bits 4-1 are set by layout
-  EXPANDER_2    = %0111_110_0   ' bits 7-4 are taken from Datasheet; bits 4-1 are set by layout
+  EXPANDER_1    = %0111_111_0   ' bits 7-4 are taken from Datasheet; bits 3-1 are set by layout
+  EXPANDER_2    = %0111_110_0   ' bits 7-4 are taken from Datasheet; bits 3-1 are set by layout
 
   BIT_0    = %0000_0001
   BIT_1    = %0000_0010
@@ -332,6 +332,9 @@ PUB I2C_INIT : response
 '  DIRA~ ' set everything to input
 ' setup the I2C bus
   I2C.INIT(SDA, SCL)
+  expVal1 := EXPANDER_READ(EXPANDER_1)
+  expVal2 := EXPANDER_READ(EXPANDER_2)
+
 ' setup the initial values for the I2C expanders and deploy those values
  ' SET_EXPANDER_TO_LOW_POWER
 
@@ -830,6 +833,43 @@ PUB SHIFT_OUT_TO_OLED(dataOut)
   OUTA[SHARED_SCLK] := 0                         ' leave clock low on exit
   OUTA[SHARED_MOSI] := 0                         ' leave MOSI low on exit
 
+PUB SHIFT_IN_FROM_OLED | datain
+  datain := 0
+  OUTA[SHARED_SCLK] := 0
+  OUTA[SHARED_SCLK] := 1
+  datain |= OUTA[SHARED_MISO]
+  datain <<= 1
+
+  OUTA[SHARED_SCLK] := 0
+  OUTA[SHARED_SCLK] := 1
+  datain |= OUTA[SHARED_MISO]
+  datain <<= 1
+
+  OUTA[SHARED_SCLK] := 0
+  OUTA[SHARED_SCLK] := 1
+  datain |= OUTA[SHARED_MISO]
+  datain <<= 1
+
+  OUTA[SHARED_SCLK] := 0
+  OUTA[SHARED_SCLK] := 1
+  datain |= OUTA[SHARED_MISO]
+  datain <<= 1
+
+  OUTA[SHARED_SCLK] := 0
+  OUTA[SHARED_SCLK] := 1
+  datain |= OUTA[SHARED_MISO]
+  datain <<= 1
+
+  OUTA[SHARED_SCLK] := 0
+  OUTA[SHARED_SCLK] := 1
+  datain |= OUTA[SHARED_MISO]
+  datain <<= 1
+
+  OUTA[SHARED_SCLK] := 0
+  OUTA[SHARED_SCLK] := 1
+  datain |= OUTA[SHARED_MISO]
+
+
 PUB OLED_OFF
 ' Turn off the switch that allows 3.3V power to pass to the OLED
   expVal2 &= !(OLED_EN)  ' and turn off OLED
@@ -858,6 +898,15 @@ PUB EXPANDER_WRITE(deviceAddress, expanderValue)
   I2C.WRITE(expanderValue)
   I2C.STOP
   return MY_TRUE
+
+PUB EXPANDER_READ(deviceAddress) | expVal
+ if deviceAddress <> EXPANDER_1 and deviceAddress <> EXPANDER_2
+    return MY_FALSE
+  ' need a way to indicate error return?'
+  I2C.START
+  I2C.WRITE(deviceAddress & 1)
+  expVal := I2C.READ(NAK)  ' the expander ignores this nak/ack - what wshould it b?'
+  I2C.STOP  
 
 PUB READ_EUI 
   I2C.START
