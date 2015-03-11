@@ -50,8 +50,9 @@ CON ' Uart command constants
     STOMP_DATA            = "W"
     LINE_ONE              = "1"
     LINE_TWO              = "2"
+    EUI                   = "E"
 
-    MAX_COMMANDS      =     13
+    MAX_COMMANDS      =     15
 
   #0, WAITING_FOR_START, WAITING_FOR_END, PROCESS_BUFFER
   
@@ -1026,7 +1027,10 @@ PUB PROCESS_UART | idx, pkpA, pkpB, pkpC, cursor
       inUartBuf[2+16] := 0                    ' make sure that we have a zero-terminated string that won't exceed OLED length
       PEBBLE.OLED_WRITE_LINE1(string("                "))  ' clear the line before writing to it.
       PEBBLE.OLED_WRITE_LINE1(@inUartBuf[inUartPtr[1]])    ' print the message  
-                                               '  
+    
+    EUI :
+      PRINT_EUI
+                                                 '  
     OTHER: 
       UARTS.STR(DEBUG, string(" Unrecognized command."))
 
