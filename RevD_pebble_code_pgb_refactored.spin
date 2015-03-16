@@ -201,7 +201,7 @@ DAT ' oled messages
   awakeMsg   byte   "System Ready.   ", 0
   magnetMsg  byte   "Wake with Magnet", 0
   euiMsg     byte   "SN:             ", 0
-  versionMsg byte   "Version 2.0.1   ", 0
+  versionMsg byte   "Version 2.1.1   ", 0
 
 OBJ                                  
   UARTS     : "FullDuplexSerial4portPlus_0v3"       '1 COG for 3 serial ports
@@ -246,39 +246,12 @@ VAR
 
 PUB MAIN | idx, response,  pressType, bPressed
 ' the main method here is a simple state machine
-{  LAUNCH_SERIAL_COG
-  PAUSE_MS(1_000)
-  UARTS.STR(DEBUG, string(13,"System rebooted:"))
-  repeat
-    UARTS.PUTC(DEBUG, CR)
-    UARTS.DEC(DEBUG, idx++)
-    PAUSE_MS(1000)
-}    
-  ' these things only happen once EVER
-'  PEBBLE.GUMSTIX_ON
-'  repeat
-'    waitcnt(0)
     
   mainCogId     := cogid
   watchDogCogId := -1
   START_WATCHDOG
-  DIRA[WAKEUP] := 1
-  OUTA[WAKEUP] := 0
-
-  ' sak - first time 
-  sampleRate   :=  1000  'PEBBLE.READ_EEPROM_LONG(SPS_ADDRESS) 
-  gainA        :=  1     'PEBBLE.READ_EEPROM_LONG(GAIN_A_ADDRESS)
-  gainB        :=  1     'PEBBLE.READ_EEPROM_LONG(GAIN_B_ADDRESS)
-  gainC        :=  1     'PEBBLE.READ_EEPROM_LONG(GAIN_C_ADDRESS)
-  gainD        :=  10    'PEBBLE.READ_EEPROM_LONG(GAIN_D_ADDRESS)
-  sourceA      :=  INTERNAL 'PEBBLE.READ_EEPROM_LONG(SOURCE_A_ADDRESS)
-  sourceB      :=  INTERNAL 'PEBBLE.READ_EEPROM_LONG(SOURCE_B_ADDRESS)
-  sourceC      :=  INTERNAL 'PEBBLE.READ_EEPROM_LONG(SOURCE_C_ADDRESS)
-  sourceD      :=  INTERNAL 'PEBBLE.READ_EEPROM_LONG(SOURCE_D_ADDRESS)
-  interval     :=  2     ' ignored in CONT mode   
-  recordLength :=  0     ' ignored in CONT mode
-  acqMode      := CONT
-  STORE_PARAMETERS_TO_SRAM
+  DIRA[WAKEUP]  := 1
+  OUTA[WAKEUP]  := 0
 
   mainState := TURNING_ON
   'mainState := OFF
@@ -288,8 +261,6 @@ PUB MAIN | idx, response,  pressType, bPressed
     PET_WATCHDOG                 ' do this every time through the loop.
     bPressed := BUTTON_PRESSED   ' check for button press
 
-    if bPressed
-      UARTS.STR(DEBUG, string("button pressed", 13))
 
     case mainState
       OFF  :
@@ -304,8 +275,8 @@ PUB MAIN | idx, response,  pressType, bPressed
         PRINT_SYSTEM_PARAMETERS
         case acqMode
           OFF  :
-            mainState := TURNING_OFF
             UARTS.STR(DEBUG, string(13, "Leaving for turning off"))
+            mainState := TURNING_OFF
           TRIG :
             UARTS.STR(DEBUG, string(13, "Leaving for triggered"))
             START_ACQUISITION
@@ -334,8 +305,8 @@ PUB TURN_SYSTEM_ON | displayTime
   slaveCogId    := -1
 
   PEBBLE.I2C_INIT               ' when we wakeup gumstix should be off
-  PEBBLE.OLED_ON                ' turn on and init oled
   PEBBLE.GUMSTIX_ON             ' sak preferes to have gumstix on right away
+  PEBBLE.OLED_ON                ' turn on and init oled
   PEBBLE.GPS_ON
 
 
@@ -345,7 +316,7 @@ PUB TURN_SYSTEM_ON | displayTime
   PAUSE_MS(1_000)
   UARTS.STR(DEBUG, string(13, "$PSMSG, Waking system."))
 
-  'GET_AND_PRINT_PARAMETERS
+  GET_AND_PRINT_PARAMETERS
   PET_WATCHDOG
 
   CONFIG_GPS
@@ -403,7 +374,7 @@ PUB TURN_SYSTEM_OFF | i
   PEBBLE.OLED_WRITE_LINE2(@magnetMsg)
   DIRA[SLAVE_IRQ] := 1         ' raise IRQ line so gumstix doesn't keep acquiring
   OUTA[SLAVE_IRQ] := 1
-  PAUSE_MS(10_000)
+  PAUSE_MS(4_000)
 
   PET_WATCHDOG
   PEBBLE.OLED_OFF
@@ -730,29 +701,27 @@ PUB PRINT_RTC_TIME
 PUB PRINT_TIME_AND_DATE
   PRINT_RTC_TIME
 ' print the RTC and GPS time and dates
-  ' don't do this in ON state, gumstix owns line1 and 2 of oled
-  if mainState <> ON
-    oLedBuf[ 0] := "0" #> (rtcYear  / 10 // 10+ "0"   ) <# "9"
-    oLedBuf[ 1] := "0" #> (rtcYear // 10 + "0"        ) <# "9"
-    oLedBuf[ 2] := "0" #> (rtcMonth  / 10 // 10 + "0" ) <# "9"               ' divide first to guarnatee result is less than 10
-    oLedBuf[ 3] := "0" #> (rtcMonth // 10+ "0"        ) <# "9"
-    oLedBuf[ 4] := "0" #> (rtcDay  / 10 // 10 + "0"  ) <# "9"              ' divide first to guarnatee result is less than 10
-    oLedBuf[ 5] := "0" #> (rtcDay // 10+ "0"         ) <# "9"
-    oLedBuf[ 6] := " "
-    oLedBuf[ 7] := "0" #> (rtcHour  / 10 // 10 + "0"  ) <# "9"
-    oLedBuf[ 8] := "0" #> (rtcHour // 10 + "0"        ) <# "9"
-    oLedBuf[ 9] := "0" #> (rtcMinute  / 10 // 10 + "0" ) <# "9"
-    oLedBuf[10] := "0" #> (rtcMinute // 10 + "0"       ) <# "9"
-    oLedBuf[11] := "0" #> (rtcSecond  / 10 // 10 + "0" ) <# "9"
-    oLedBuf[12] := "0" #> (rtcSecond // 10 + "0"       ) <# "9"
-    oLedBuf[13] := " "
-    if UBX.NUM_SVs > 9
-      oLedBuf[14] := UBX.NUM_SVs - 9 + "A"
-    else
-      oLedBuf[14] := UBX.NUM_SVs + "0"
-    oLedBuf[15] := lockType
-    oLedBuf[16] := 0              ' zero terminate the buffer
-    PEBBLE.OLED_WRITE_LINE1(@oLedBuf)
+  oLedBuf[ 0] := "0" #> (rtcYear  / 10 // 10+ "0"   ) <# "9"
+  oLedBuf[ 1] := "0" #> (rtcYear // 10 + "0"        ) <# "9"
+  oLedBuf[ 2] := "0" #> (rtcMonth  / 10 // 10 + "0" ) <# "9"               ' divide first to guarnatee result is less than 10
+  oLedBuf[ 3] := "0" #> (rtcMonth // 10+ "0"        ) <# "9"
+  oLedBuf[ 4] := "0" #> (rtcDay  / 10 // 10 + "0"  ) <# "9"              ' divide first to guarnatee result is less than 10
+  oLedBuf[ 5] := "0" #> (rtcDay // 10+ "0"         ) <# "9"
+  oLedBuf[ 6] := " "
+  oLedBuf[ 7] := "0" #> (rtcHour  / 10 // 10 + "0"  ) <# "9"
+  oLedBuf[ 8] := "0" #> (rtcHour // 10 + "0"        ) <# "9"
+  oLedBuf[ 9] := "0" #> (rtcMinute  / 10 // 10 + "0" ) <# "9"
+  oLedBuf[10] := "0" #> (rtcMinute // 10 + "0"       ) <# "9"
+  oLedBuf[11] := "0" #> (rtcSecond  / 10 // 10 + "0" ) <# "9"
+  oLedBuf[12] := "0" #> (rtcSecond // 10 + "0"       ) <# "9"
+  oLedBuf[13] := " "
+  if UBX.NUM_SVs > 9
+    oLedBuf[14] := UBX.NUM_SVs - 9 + "A"
+  else
+    oLedBuf[14] := UBX.NUM_SVs + "0"
+  oLedBuf[15] := lockType
+  oLedBuf[16] := 0              ' zero terminate the buffer
+  PEBBLE.OLED_WRITE_LINE1(@oLedBuf)
 
 
   uarts.str(debug, string(13, "$PSSTAT,"))
@@ -877,8 +846,8 @@ PUB PROCESS_UART | idx, pkpA, pkpB, pkpC, cursor
     LINE_TWO              = "2"
 }
   
-  ' UARTS.STR(DEBUG, string(13,"Received command: "))
-  ' UARTS.PUTC(DEBUG, inUartBuf[0])
+'  UARTS.STR(DEBUG, string(13,"Received command: "))
+'  UARTS.PUTC(DEBUG, inUartBuf[0])
 
   
 '  UARTS.STR(DEBUG, string(13,"inUartBuf: "))
@@ -1013,7 +982,6 @@ PUB PROCESS_UART | idx, pkpA, pkpB, pkpC, cursor
 '      else
 '        PEBBLE.OLED_WRITE_LINE2(string("Hello -         "))
 
-
     LINE_TWO :        '2
         'UARTS.STR(DEBUG, string(13,"Received command: "))
         'UARTS.PUTC(DEBUG, inUartBuf[0])
@@ -1027,10 +995,10 @@ PUB PROCESS_UART | idx, pkpA, pkpB, pkpC, cursor
       inUartBuf[2+16] := 0                    ' make sure that we have a zero-terminated string that won't exceed OLED length
       PEBBLE.OLED_WRITE_LINE1(string("                "))  ' clear the line before writing to it.
       PEBBLE.OLED_WRITE_LINE1(@inUartBuf[inUartPtr[1]])    ' print the message  
-    
+                                               '  
     EUI :
       PRINT_EUI
-                                                 '  
+
     OTHER: 
       UARTS.STR(DEBUG, string(" Unrecognized command."))
 
@@ -1065,12 +1033,20 @@ PUB READ_RTC_TIME
   rtcAddr:= PEBBLE.READ_RTC_TIME
 
 PUB GET_PARAMETERS_FROM_SRAM | response 
-' can't currently store parameters in EEPROM so we set them to be this everytime.
-  'test SRAM storage
+' collect parameters from the SRAM; this only works if we haven't lost power because SRAM
+' is battery backed-up but will die eventually.  
   response := PEBBLE.READ_RTC_SRAM
   bytemove(@sramParms, response, 64)
+  'repeat response from 0 to 63
+  '  if response // 16 == 0
+  '    UARTS.PUTC(DEBUG, CR)
+  '    UARTS.DEC(DEBUG, response)
+  '    UARTS.PUTC(DEBUG, TAB)
+  '  UARTS.HEX(DEBUG, sramParms[response],2)
+  '  UARTS.PUTC(DEBUG, " ")
 
-  if sramParms[0] == "G" AND sramParms[1] == "P" ' look to see if these data are valid
+
+  if sramParms[0] == "G" AND sramParms[1] == "P" AND strcomp(@sramParms[30], @versionMsg)' look to see if these data are valid
     UARTS.STR(DEBUG, string(13,"Parameters loaded from SRAM. "))
     UARTS.STR(DEBUG, @euiMsg[4])
     sampleRate   := sramParms[2] << 8 | sramParms[3]  ' bytes 2 and 3 are sampleRate
@@ -1088,37 +1064,47 @@ PUB GET_PARAMETERS_FROM_SRAM | response
   else     ' here are the factory default params
     UARTS.STR(DEBUG, string(13,"SRAM parameters corrupt. "))
     UARTS.STR(DEBUG, @euiMsg[4])
-    sampleRate   :=  1000  'PEBBLE.READ_EEPROM_LONG(SPS_ADDRESS) 
-    gainA        :=  1     'PEBBLE.READ_EEPROM_LONG(GAIN_A_ADDRESS)
-    gainB        :=  1     'PEBBLE.READ_EEPROM_LONG(GAIN_B_ADDRESS)
-    gainC        :=  1     'PEBBLE.READ_EEPROM_LONG(GAIN_C_ADDRESS)
-    gainD        :=  10    'PEBBLE.READ_EEPROM_LONG(GAIN_D_ADDRESS)
-    sourceA      :=  INTERNAL 'PEBBLE.READ_EEPROM_LONG(SOURCE_A_ADDRESS)
-    sourceB      :=  INTERNAL 'PEBBLE.READ_EEPROM_LONG(SOURCE_B_ADDRESS)
-    sourceC      :=  INTERNAL 'PEBBLE.READ_EEPROM_LONG(SOURCE_C_ADDRESS)
-    sourceD      :=  INTERNAL 'PEBBLE.READ_EEPROM_LONG(SOURCE_D_ADDRESS)
-    interval     :=  2     ' ignored in CONT mode   
-    recordLength :=  0     ' ignored in CONT mode
+    sampleRate   :=  1000  
+    gainA        :=  1     
+    gainB        :=  1     
+    gainC        :=  1     
+    gainD        :=  10    
+    sourceA      :=  INTERNAL 
+    sourceB      :=  INTERNAL 
+    sourceC      :=  INTERNAL 
+    sourceD      :=  INTERNAL 
+    interval     :=  2        
+    recordLength :=  0     
     acqMode      := CONT
     STORE_PARAMETERS_TO_SRAM
     UARTS.STR(DEBUG, string(13,"Wrote new parameters to SRAM."))
 
 PUB STORE_PARAMETERS_TO_SRAM
-  sramParms[0] := "G"
-  sramParms[1] := "P" ' look to see if these data are valid
-  sramParms[2] := sampleRate >> 8
-  sramParms[3] := sampleRate & $FF
-  sramParms[4] := gainA
-  sramParms[5] := gainB
-  sramParms[6] := gainC
-  sramParms[7] := gainD
-  sramParms[8] := sourceA
-  sramParms[9] := sourceB
+  bytefill(@sramParms, 0, 64)
+
+  sramParms[0]  := "G"
+  sramParms[1]  := "P" ' look to see if these data are valid
+  sramParms[2]  := sampleRate >> 8
+  sramParms[3]  := sampleRate & $FF
+  sramParms[4]  := gainA
+  sramParms[5]  := gainB
+  sramParms[6]  := gainC
+  sramParms[7]  := gainD
+  sramParms[8]  := sourceA
+  sramParms[9]  := sourceB
   sramParms[10] := sourceC
   sramParms[11] := sourceD
   sramParms[12] := interval
   sramParms[13] := recordLength
   sramParms[14] := acqMode
+  bytemove(@sramParms[30], @versionMsg, strsize(@versionMsg))
+
+  'UARTS.STR(DEBUG, string(13,"Writing to SRAM:"))
+  'UARTS.STR(DEBUG, @versionMsg)
+  'UARTS.STR(DEBUG, string("."))
+  'UARTS.DEC(DEBUG, strsize(@versionMsg))
+  'UARTS.STR(DEBUG, string(" bytes."))
+  
 
   PEBBLE.WRITE_RTC_SRAM(@sramParms)
   

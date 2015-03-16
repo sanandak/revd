@@ -201,7 +201,7 @@ DAT ' oled messages
   awakeMsg   byte   "System Ready.   ", 0
   magnetMsg  byte   "Wake with Magnet", 0
   euiMsg     byte   "SN:             ", 0
-  versionMsg byte   "Version 2.0.1   ", 0
+  versionMsg byte   "Version 2.1.0   ", 0
 
 OBJ                                  
   UARTS     : "FullDuplexSerial4portPlus_0v3"       '1 COG for 3 serial ports
@@ -287,9 +287,6 @@ PUB MAIN | idx, response,  pressType, bPressed
 
     PET_WATCHDOG                 ' do this every time through the loop.
     bPressed := BUTTON_PRESSED   ' check for button press
-
-    if bPressed
-      UARTS.STR(DEBUG, string("button pressed", 13))
 
     case mainState
       OFF  :
