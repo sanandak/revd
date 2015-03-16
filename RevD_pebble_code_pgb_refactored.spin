@@ -48,7 +48,11 @@ CON ' Uart command constants
     GAIN                  = "G"
     SOURCE                = "O"
     STOMP_DATA            = "W"
+    LINE_ONE              = "1"
     LINE_TWO              = "2"
+    EUI                   = "E"
+
+    MAX_COMMANDS      =     15
 
   #0, WAITING_FOR_START, WAITING_FOR_END, PROCESS_BUFFER
   
@@ -165,7 +169,6 @@ CON ' UART ports and pin numbers - DEBUG, GPS, MSP
   COMMA             =     44
   CLEAR             =     16  ''CS: Clear Screen      
   HOME              =      1  ''HM: HoMe cursor       
-  MAX_COMMANDS      =     10
   
   DEBUG_RX_FROM     = 31
   DEBUG_TX_TO       = 30
@@ -243,24 +246,12 @@ VAR
 
 PUB MAIN | idx, response,  pressType, bPressed
 ' the main method here is a simple state machine
-{  LAUNCH_SERIAL_COG
-  PAUSE_MS(1_000)
-  UARTS.STR(DEBUG, string(13,"System rebooted:"))
-  repeat
-    UARTS.PUTC(DEBUG, CR)
-    UARTS.DEC(DEBUG, idx++)
-    PAUSE_MS(1000)
-}    
-  ' these things only happen once EVER
-'  PEBBLE.GUMSTIX_ON
-'  repeat
-'    waitcnt(0)
     
   mainCogId     := cogid
   watchDogCogId := -1
   START_WATCHDOG
-  DIRA[WAKEUP] := 1
-  OUTA[WAKEUP] := 0
+  DIRA[WAKEUP]  := 1
+  OUTA[WAKEUP]  := 0
 
   mainState := TURNING_ON
   'mainState := OFF
@@ -281,15 +272,17 @@ PUB MAIN | idx, response,  pressType, bPressed
   
       TURNING_ON :
         TURN_SYSTEM_ON
+        PRINT_SYSTEM_PARAMETERS
         case acqMode
           OFF  :
-            mainState := TURNING_OFF
             UARTS.STR(DEBUG, string(13, "Leaving for turning off"))
+            mainState := TURNING_OFF
           TRIG :
             UARTS.STR(DEBUG, string(13, "Leaving for triggered"))
             START_ACQUISITION
             mainState := ON
           CONT :
+            UARTS.STR(DEBUG, string(13, "In CONT, entering START_ACQUISITION"))
             START_ACQUISITION
             mainState := ON
 
@@ -312,8 +305,8 @@ PUB TURN_SYSTEM_ON | displayTime
   slaveCogId    := -1
 
   PEBBLE.I2C_INIT               ' when we wakeup gumstix should be off
-  PEBBLE.OLED_ON                ' turn on and init oled
   PEBBLE.GUMSTIX_ON             ' sak preferes to have gumstix on right away
+  PEBBLE.OLED_ON                ' turn on and init oled
   PEBBLE.GPS_ON
 
 
@@ -323,7 +316,6 @@ PUB TURN_SYSTEM_ON | displayTime
   PAUSE_MS(1_000)
   UARTS.STR(DEBUG, string(13, "$PSMSG, Waking system."))
 
-  WRITE_DEFAULT_PARAMS_TO_SRAM
   GET_AND_PRINT_PARAMETERS
   PET_WATCHDOG
 
@@ -990,11 +982,23 @@ PUB PROCESS_UART | idx, pkpA, pkpB, pkpC, cursor
 '      else
 '        PEBBLE.OLED_WRITE_LINE2(string("Hello -         "))
 
-{    LINE_TWO :        '2
-        inUartBuf[2+16] := 0                    ' make sure that we have a zero-terminated string that won't exceed OLED length
-        PEBBLE.OLED_WRITE_LINE2(string("                "))  ' clear the line before writing to it.
-        PEBBLE.OLED_WRITE_LINE2(@inUartBuf[inUartPtr[1]])    ' print the message  
-}                                               '  
+    LINE_TWO :        '2
+        'UARTS.STR(DEBUG, string(13,"Received command: "))
+        'UARTS.PUTC(DEBUG, inUartBuf[0])
+      inUartBuf[2+16] := 0                    ' make sure that we have a zero-terminated string that won't exceed OLED length
+      PEBBLE.OLED_WRITE_LINE2(string("                "))  ' clear the line before writing to it.
+      PEBBLE.OLED_WRITE_LINE2(@inUartBuf[inUartPtr[1]])    ' print the message  
+
+    LINE_ONE :        '1
+        'UARTS.STR(DEBUG, string(13,"Received command: "))
+        'UARTS.PUTC(DEBUG, inUartBuf[0])
+      inUartBuf[2+16] := 0                    ' make sure that we have a zero-terminated string that won't exceed OLED length
+      PEBBLE.OLED_WRITE_LINE1(string("                "))  ' clear the line before writing to it.
+      PEBBLE.OLED_WRITE_LINE1(@inUartBuf[inUartPtr[1]])    ' print the message  
+                                               '  
+    EUI :
+      PRINT_EUI
+
     OTHER: 
       UARTS.STR(DEBUG, string(" Unrecognized command."))
 
@@ -1105,7 +1109,7 @@ PUB WRITE_DEFAULT_PARAMS_TO_SRAM
 
 PUB PRINT_SYSTEM_PARAMETERS
   
-  PEBBLE.OLED_WRITE_LINE1(string("Getting Params.."))
+  ' PEBBLE.OLED_WRITE_LINE1(string("Getting Params.."))
   UARTS.STR(DEBUG, string(13, "$PSPARMS,"))
   UARTS.DEC(DEBUG, sampleRate)
   UARTS.PUTC(DEBUG, COMMA)
@@ -1140,6 +1144,8 @@ PUB PRINT_SYSTEM_PARAMETERS
   UARTS.DEC(DEBUG, interval)
   UARTS.PUTC(DEBUG, COMMA)
   UARTS.DEC(DEBUG, recordLength)
+  UARTS.PUTC(DEBUG, COMMA)
+  UARTS.DEC(DEBUG, acqMode)
 
   
 PUB GET_GPS_LOCK | idx, response

@@ -877,6 +877,7 @@ PUB READ_EUI
 
 PUB READ_RTC_SRAM | idx
 ' method that reads all the bytes from SRAM and stores them locally @rtcSram
+  bytefill(@rtcSram, 0, 64)
   I2C.START
   I2C.WRITE(RTC_ADDR|I2C_WRITE)
   I2C.WRITE(RTC_SRAM_BASE)
