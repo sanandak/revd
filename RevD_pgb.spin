@@ -392,6 +392,8 @@ PUB TURN_SYSTEM_OFF | i
   lockret(gpsSem)                               '
 
   PEBBLE.SET_EXPANDER_TO_LOW_POWER
+  PAUSE_MS(200)
+  PEBBLE._rcslow_prop
   'PEBBLE.
 
 PUB FREE_COGS | idx, response
@@ -459,7 +461,8 @@ PUB WATCHDOG | timeSincePet, programMode, i
     PAUSE_MS(10)                ' spend some time sleeping but not too much
 
     ' Check for watchdog timeout
-    if (CNT - watchDogTimer) > WATCH_DOG_TIMEOUT_CNT 
+'    if (CNT - watchDogTimer) > WATCH_DOG_TIMEOUT_CNT 
+    if (CNT - watchDogTimer) > (clkfreq/1000*WATCH_DOG_TIMEOUT_MS) 
       REBOOT
 
 

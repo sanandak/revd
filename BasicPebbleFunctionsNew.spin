@@ -264,70 +264,15 @@ CON ' ACK/NAK
   I2C_WRITE = 0
   
 OBJ
-  I2C:       "Pebble_I2C_Object"
+  I2C:       "Pebble_I2C_ObjectNew"
 
 VAR
-  byte expVal1, expVal2
+  byte expVal1, expVal2 
   byte eui_48[8]      ' storage for the 8-bytes read from the RTC/Memory
   byte rtcSram[64]   ' 64-byte SRAM storage
   byte mag[6]
   byte rtcTime[7]
-DAT ' characters for OLED
-PLOT_1 byte   %000_11111 
-       byte   %000_11111
-       byte   %000_00000
-       byte   %000_11111
-       byte   %000_11111
-       byte   %000_00000
-       byte   %000_11111
-       byte   %000_11111
-
-PLOT_2 byte   %000_11111
-       byte   %000_11111
-       byte   %000_00000
-       byte   %000_11111
-       byte   %000_11111
-       byte   %000_00000
-       byte   %000_00000
-       byte   %000_00000
-              
-PLOT_3 byte   %000_00000 
-       byte   %000_00000
-       byte   %000_00000
-       byte   %000_11111
-       byte   %000_11111
-       byte   %000_00000
-       byte   %000_11111
-       byte   %000_11111
-              
-PLOT_4 byte   %000_11111 
-       byte   %000_11111
-       byte   %000_00000
-       byte   %000_00000
-       byte   %000_00000
-       byte   %000_00000
-       byte   %000_00000
-       byte   %000_00000
-              
-PLOT_5 byte   %000_00000 
-       byte   %000_00000
-       byte   %000_00000
-       byte   %000_11111
-       byte   %000_11111
-       byte   %000_00000
-       byte   %000_00000
-       byte   %000_00000
-              
-PLOT_6 byte   %000_00000 
-       byte   %000_00000
-       byte   %000_00000
-       byte   %000_00000
-       byte   %000_00000
-       byte   %000_00000
-       byte   %000_11111
-       byte   %000_11111
-              
-              
+                
 PUB I2C_INIT : response
 '  DIRA~ ' set everything to input
 ' setup the I2C bus
@@ -628,118 +573,6 @@ PUB OLED_INIT
 
   OLED_COMMAND($0C)              ' Turn ON OLED
 
-PRI INIT_A0_B0_C0 ' not really needed since this is just an empty space                                                    
-'// Create the custom character in CGRAM.
-'// DDRAM address in Font Table is $00.
-'// Address location increments automatically after each write to CGRAM.
-   OLED_COMMAND($40)             ' Set CGRAM start address
-   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
-   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
-   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
-   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
-   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
-   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
-   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
-   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
-
-PRI INIT_A0_B0_C1                                                     
-'// Create the custom character in CGRAM.
-'// DDRAM address in Font Table is $00.
-'// Address location increments automatically after each write to CGRAM.
-   OLED_COMMAND($48)             ' Set CGRAM start address
-   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
-   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
-   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
-   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
-   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
-   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
-   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
-   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
-
-PRI INIT_A0_B1_C0                                                     
-'// Create the custom character in CGRAM.
-'// DDRAM address in Font Table is $00.
-'// Address location increments automatically after each write to CGRAM.
-   OLED_COMMAND($50)             ' Set CGRAM start address
-   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
-   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
-   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
-   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
-   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
-   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
-   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
-   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
-
-PRI INIT_A0_B1_C1                                                     
-'// Create the custom character in CGRAM.
-'// DDRAM address in Font Table is $00.
-'// Address location increments automatically after each write to CGRAM.
-   OLED_COMMAND($58)             ' Set CGRAM start address
-   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
-   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
-   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
-   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
-   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
-   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
-   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
-   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
-
-PRI INIT_A1_B0_C0                                                     
-'// Create the custom character in CGRAM.
-'// DDRAM address in Font Table is $00.
-'// Address location increments automatically after each write to CGRAM.
-   OLED_COMMAND($60)             ' Set CGRAM start address
-   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
-   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
-   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
-   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
-   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
-   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
-   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
-   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
-
-PRI INIT_A1_B0_C1                                                     
-'// Create the custom character in CGRAM.
-'// DDRAM address in Font Table is $00.
-'// Address location increments automatically after each write to CGRAM.
-   OLED_COMMAND($68)             ' Set CGRAM start address
-   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
-   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
-   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
-   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
-   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
-   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
-   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
-   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
-
-PRI INIT_A1_B1_C0                                                     
-'// Create the custom character in CGRAM.
-'// DDRAM address in Font Table is $00.
-'// Address location increments automatically after each write to CGRAM.
-   OLED_COMMAND($70)             ' Set CGRAM start address
-   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
-   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
-   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
-   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
-   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
-   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
-   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
-   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
-
-PRI INIT_A1_B1_C1                                                     
-'// Create the custom character in CGRAM.
-'// DDRAM address in Font Table is $00.
-'// Address location increments automatically after each write to CGRAM.
-   OLED_COMMAND($78)             ' Set CGRAM start address
-   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
-   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
-   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
-   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
-   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
-   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
-   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
-   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
-
 PUB OLED_WRITE_LINE1(stringPtr)
 '// Write character arry data to the first line of the display.
 
@@ -857,6 +690,7 @@ PUB EXPANDER_WRITE(deviceAddress, expanderValue)
   I2C.WRITE(deviceAddress)
   I2C.WRITE(expanderValue)
   I2C.STOP
+
   return MY_TRUE
 
 PUB READ_EUI 
@@ -932,7 +766,7 @@ PUB SET_RTC_TIME(year, month, day, hour, minute, second, wkday)
   I2C.WRITE(RTC_ADDR|I2C_WRITE)
   I2C.WRITE(RTCSEC)
   I2C.WRITE(CONVERT_TO_BCD(second)|ST)
-  I2C.IDLE
+  'I2C.IDLE
   I2C.STOP
 
 PUB CONVERT_TO_BCD(number) : bcdValue
@@ -960,13 +794,13 @@ PUB READ_RTC_TIME
   I2C.STOP
   return @rtcTime
   
-PUB READ_EEPROM_LONG(startAddress) | eepromData
+{PUB READ_EEPROM_LONG(startAddress) | eepromData
   ' read long
   return I2C.READ_LONG(EEPROM_ADDR, startAddress)
 
 PUB WRITE_EEPROM_LONG(startAddress, val)
   I2C.WRITE_LONG(EEPROM_ADDR, startAddress, val)
-  
+}  
 PUB WRITE_TO_DAC(newDacValue)| dacCode
 ' method that clocks out 24 bits to the DAC.  This command is a "Write to and Update" variety
   dacCode := WRITE_AND_UPDATE | (newDacValue & $FFFF)
@@ -1251,7 +1085,10 @@ PUB TO_HEX(value)
   value <<= 7 << 2
   return lookupz((value <-= 4) & $F : "0".."9", "A".."F")
   
-PUB _rcslow_prop
+PUB PAUSE_MS(mS)
+  waitcnt(clkfreq/1000 * mS + cnt)
+
+PRI _rcslow_prop
 '' put propeller into slowest power save speed (using internal oscilator)
 
   clkset(%0_0_0_00_001, 20_000)                                                 ' ~20kHz no PLL
@@ -1301,5 +1138,170 @@ PRI _slow_to_fast_prop
   waitcnt(1000 + cnt)                                                            ' wait 100us for PLL to stabilize
   clkset(%0_1_1_01_111, 100_000_000)                                            ' 80MHz
 
-PUB PAUSE_MS(mS)
-  waitcnt(clkfreq/1000 * mS + cnt)  
+PRI INIT_A0_B0_C0 ' not really needed since this is just an empty space                                                    
+'// Create the custom character in CGRAM.
+'// DDRAM address in Font Table is $00.
+'// Address location increments automatically after each write to CGRAM.
+   OLED_COMMAND($40)             ' Set CGRAM start address
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+
+PRI INIT_A0_B0_C1                                                     
+'// Create the custom character in CGRAM.
+'// DDRAM address in Font Table is $00.
+'// Address location increments automatically after each write to CGRAM.
+   OLED_COMMAND($48)             ' Set CGRAM start address
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
+   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
+
+PRI INIT_A0_B1_C0                                                     
+'// Create the custom character in CGRAM.
+'// DDRAM address in Font Table is $00.
+'// Address location increments automatically after each write to CGRAM.
+   OLED_COMMAND($50)             ' Set CGRAM start address
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
+   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+
+PRI INIT_A0_B1_C1                                                     
+'// Create the custom character in CGRAM.
+'// DDRAM address in Font Table is $00.
+'// Address location increments automatically after each write to CGRAM.
+   OLED_COMMAND($58)             ' Set CGRAM start address
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
+   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
+   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
+
+PRI INIT_A1_B0_C0                                                     
+'// Create the custom character in CGRAM.
+'// DDRAM address in Font Table is $00.
+'// Address location increments automatically after each write to CGRAM.
+   OLED_COMMAND($60)             ' Set CGRAM start address
+   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
+   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+
+PRI INIT_A1_B0_C1                                                     
+'// Create the custom character in CGRAM.
+'// DDRAM address in Font Table is $00.
+'// Address location increments automatically after each write to CGRAM.
+   OLED_COMMAND($68)             ' Set CGRAM start address
+   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
+   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
+   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
+
+PRI INIT_A1_B1_C0                                                     
+'// Create the custom character in CGRAM.
+'// DDRAM address in Font Table is $00.
+'// Address location increments automatically after each write to CGRAM.
+   OLED_COMMAND($70)             ' Set CGRAM start address
+   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
+   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
+   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+
+PRI INIT_A1_B1_C1                                                     
+'// Create the custom character in CGRAM.
+'// DDRAM address in Font Table is $00.
+'// Address location increments automatically after each write to CGRAM.
+   OLED_COMMAND($78)             ' Set CGRAM start address
+   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
+   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
+   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
+   OLED_DATA(%0_0000)            ' Write Data to CGRAM  
+   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
+   OLED_DATA(%1_1111)            ' Write Data to CGRAM  
+
+DAT ' characters for OLED
+PLOT_1 byte   %000_11111 
+       byte   %000_11111
+       byte   %000_00000
+       byte   %000_11111
+       byte   %000_11111
+       byte   %000_00000
+       byte   %000_11111
+       byte   %000_11111
+
+PLOT_2 byte   %000_11111
+       byte   %000_11111
+       byte   %000_00000
+       byte   %000_11111
+       byte   %000_11111
+       byte   %000_00000
+       byte   %000_00000
+       byte   %000_00000
+              
+PLOT_3 byte   %000_00000 
+       byte   %000_00000
+       byte   %000_00000
+       byte   %000_11111
+       byte   %000_11111
+       byte   %000_00000
+       byte   %000_11111
+       byte   %000_11111
+              
+PLOT_4 byte   %000_11111 
+       byte   %000_11111
+       byte   %000_00000
+       byte   %000_00000
+       byte   %000_00000
+       byte   %000_00000
+       byte   %000_00000
+       byte   %000_00000
+              
+PLOT_5 byte   %000_00000 
+       byte   %000_00000
+       byte   %000_00000
+       byte   %000_11111
+       byte   %000_11111
+       byte   %000_00000
+       byte   %000_00000
+       byte   %000_00000
+              
+PLOT_6 byte   %000_00000 
+       byte   %000_00000
+       byte   %000_00000
+       byte   %000_00000
+       byte   %000_00000
+       byte   %000_00000
+       byte   %000_11111
+       byte   %000_11111
+                
