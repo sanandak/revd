@@ -234,7 +234,10 @@ VAR
   long euiAddr        ' hub address of 48 bytes containing the unique ID for this device
   ' keep these in order  ymd, hms, cntsAtPPS are populated in the main cog but need to be passed down to the SPIslave cog
   long ymd, hms, cntsAtPPS1, validStatus, cntsTemp, accuracy
+
   ' the next 2 line refers to the HUB storage where things sit before be shifted out to the gumstix
+  long auxBuffer1[128]          ' put stuff here while we collect it.  Then move it to aux2 to had over to the SPI cog
+  long auxDataToWrite, auxBuffer2[128]
   long gpsDataToWrite, gpsBuffer[256]
   long slaveBufCMD, slaveBuffer[LONGS_IN_SLAVE_BUFFER]       
 
@@ -487,9 +490,14 @@ PUB START_ACQUISITION
   gpsSem    := locknew
   
 
+  auxDataToWrite := MY_FALSE         ' remember FALSE = 0
+  auxFlagPtr     := @auxDataToWrite  ' pass the HUB address to SPI_SLAVE cog
+  auxBasePtr     := @auxBuffer2      ' pass the HUB address to SPI_SLAVE cog
+
   gpsDataToWrite := MY_FALSE         ' remember FALSE = 0
   gpsFlagPtr     := @gpsDataToWrite  ' pass the HUB address to SPI_SLAVE cog
   gpsBasePtr     := @gpsBuffer       ' pass the HUB address to SPI_SLAVE cog
+
   timeDatePtr    := @ymd
   validPtr       := @validStatus
   blocksInFIFO   := 0
@@ -556,7 +564,8 @@ PUB DO_SOMETHING_USEFUL | rxByte, response, idx
       cntsTemp := CNT - PHSB
       UPDATE_TIME_AND_DATE                   ' KEEP IN MIND WE ALWAYS UPDATE TIME/DATE ON THE PPS following OUR MESSAGE SO WE ARE BEHIND ONE SECOND
       PRINT_TIME_AND_DATE
-
+      SEND_AUX_PACKET
+      
     %10 : ' falling edge now we can reset phsb since it won't increment until PPS goes high again
       PHSB := 0
 
@@ -604,6 +613,50 @@ PUB DO_SOMETHING_USEFUL | rxByte, response, idx
     UBX.CLEAR_UBX_BUFFER                                ' clear the pointer on that side so it can process next second
     gpsDataToWrite := MY_TRUE                           ' let the other cogs know there are gps data to write
 
+PUB SEND_AUX_PACKET | idx, wakeUpMode, recTypeEnum, timeOfDayOn, timeOfDaySleep, radioOnDuration, rtcYMD, rtcHMS
+' copy the aux data from aux1 to aux2
+' signal the SPI cog that we've got aux data to send
+' wipe out the buffer so it's ready for next time
+
+  repeat until auxDataToWrite == MY_FALSE ' wait here until previous packet has been sent
+  
+  longmove(@auxBuffer2 , @auxBuffer1 , 128)
+  idx := 0
+
+  auxBuffer2.byte[idx++] := "P"
+  auxBuffer2.byte[idx++] := "A"
+  auxBuffer2.byte[idx++] := VERSION
+  auxBuffer2.byte[idx++] := validStatus
+
+  case recTypeEnum
+    0 : auxBuffer2.byte[idx++] := 0 ' continuous
+    1 : auxBuffer2.byte[idx++] := 1 ' triggered
+    2 : auxBuffer2.byte[idx++] := 2 ' timed
+    3 : auxBuffer2.byte[idx++] := 3 ' threshold
+    4 : auxBuffer2.byte[idx++] := 4 ' radio
+    OTHER : auxBuffer2.byte[idx++] := 0
+     
+  auxBuffer2.byte[idx++] := recordLength
+  auxBuffer2.byte[idx++] := interval
+  auxBuffer2.byte[idx++] := 0 'reserved
+
+  auxBuffer2.byte[idx++] := wakeUpMode
+  auxBuffer2.byte[idx++] := timeOfDayOn
+  auxBuffer2.byte[idx++] := timeOfDaySleep
+  auxBuffer2.byte[idx++] := radioOnDuration
+
+  auxBuffer2[3] := dacValue
+
+  auxBuffer2[4] := rtcYMD
+  auxBuffer2[5] := rtcHMS
+
+  auxBuffer2[6] := 0 ' reserved
+  auxBuffer2[7] := 0 ' reserved
+
+  auxDataToWrite := MY_TRUE
+    
+  longfill(@auxBuffer1 , 0 , 128)
+    
 PUB UPDATE_TIME_AND_DATE | isLeapYear
 '' get the RTC AND GPS time
 
@@ -1591,9 +1644,16 @@ DAT ' day in each month for leap and non-leap year
   leapTable   byte  0, 31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30  ' leap year
   noLeapTable byte  0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30  ' NOT leap year
 
-DAT 'GUMSTIX_SLAVE
+DAT 'SPI_SLAVE
 '' this PASM code should watch the shared HUB memory ADC buffers and write each buffer full
 '' as soon as it is available IF the gumstix is ready
+  ' the next 2 line refers to the HUB storage where things sit before be shifted out to the gumstix
+'  long auxBuffer2[128]
+'  long auxDataToWrite, auxBuffer2[128]
+'  long gpsDataToWrite, gpsBuffer[256]
+'  long slaveBufCMD, slaveBuffer[LONGS_IN_SLAVE_BUFFER]       
+
+
 GUMSTIX_SLAVE     org            0
           mov     slaveSemPtr,   par
           mov     fifoCntPtr,    par                    ' this points to the number of blocks in the FIFO?
@@ -1610,6 +1670,8 @@ GUMSTIX_SLAVE     org            0
           mov     slavePtr,      slaveBasePtr           ' make sure pointer to next sample is at the beginning of entire buffer
 
 :waitForData    ' wait here until the ADC or GPS buffer has at least one block in it
+          rdlong  stemp,         auxFlagPtr         wz  ' stemp=1 (Z=0) means data to write
+   if_nz  call    #WRITE_AUX_DATA                       ' Z=1 if stemp=0
           rdlong  stemp,         gpsFlagPtr         wz  ' stemp=1 (Z=0) means data to write
    if_nz  call    #WRITE_GPS_DATA                       ' Z=1 if stemp=0
           rdlong  fifoCnt,       fifoCntPtr         wz  ' Z=1 if fifoCnt=0
@@ -1719,6 +1781,54 @@ UPDATE_FIFO_CNT
 '          xor     outa,          stestMask
 
 UPDATE_FIFO_CNT_ret  ret
+
+{******************************** WRITE_AUX_DATA*****************************************************
+This method pulls AUX dat from HUB and spits it to the shared SPI_BUS
+***************************************************************************************************}
+WRITE_AUX_DATA
+' we've got 512 bytes or 128 longs of gps data to send.  Only need to send one buffer
+
+' bit of book-keeping before we start
+          mov     auxPtr,        auxBasePtr             ' we always begin at the beginning of the GPS buffer
+
+  ' single block write
+          mov     sampsInBlock,  #LONGS_IN_BLOCK        ' number of times we should loop per block
+          mov     sBits,         #32                wz  ' setup number of bits in write
+          rdlong  soutData,      auxPtr                 ' get long containing GPS data from HUB
+          rol     soutData,      #1                 wc  ' get highest bit of soutData
+
+
+          waitpeq scsMask,       scsMask                ' wait for CS to be HIGH
+          muxz    outa,          irqMask                ' lower controller FLAG to indicate buffer ready to be clocked out
+          waitpne scsMask,       scsMask                ' wait for CS to be LOW
+          muxnz   outa,          irqMask                ' raise controller FLAG once CS goes low
+
+:auxLoop1
+    ' write one long
+          muxc    outa,          somiMask               ' put bit onto SOMI
+          waitpeq ssclkMask,     ssclkMask              ' wait for CLK to go high
+          rol     soutData,      #1                 wc  ' get highest bit of soutData
+          waitpne ssclkMask,     ssclkMask              ' wait for CLK to go low
+          djnz    sBits,         #:auxLoop1         wz  ' Decrement loop count. Z=1 when sbits=0
+    ' end write one long
+
+    ' get ready for next Long
+          add     auxPtr,        #4                     ' increment bufferPtr
+          mov     sBits,         #32                    ' setup number of bits in write
+          rdlong  soutData,      auxPtr                 ' get long containing GPS data from HUB
+          rol     soutData,      #1                 wc  ' get highest bit of soutData
+          
+          djnz    sampsInBlock,  #:auxLoop1
+  ' end of single block write
+          
+
+' declare buffers written  
+          wrbyte  sfalse,        auxFlagPtr             ' indicate the GPS buffer if empty
+
+' setup things for next time
+          mov     auxPtr,        auxBasePtr             ' we always begin at the beginning of the GPS buffer
+
+WRITE_AUX_DATA_ret  ret
 
 {******************************** WRITE_GPS_DATA*****************************************************
 This method pulls GPS dat from HUB and spits it to the shared SPI_BUS
@@ -1840,6 +1950,9 @@ irqMask      long            |< SLAVE_IRQ
 
 fiveEight    long            $5858_5858
 sixsix       long            $6666_6666
+auxFlagPtr   long            0
+auxBasePtr   long            0
+auxPtr       long            0
 gpsFlagPtr   long            0
 gpsBasePtr   long            0
 gpsPtr       long            0
