@@ -251,8 +251,9 @@ PUB MAIN | idx, response,  pressType, bPressed
 ' the main method here is a simple state machine
     
   mainCogId     := cogid
-  watchDogCogId := -1
+  STOP_WATCHDOG     ' we need to start the watch dog with the new clockspeed; but stop it first
   START_WATCHDOG
+
   DIRA[WAKEUP]  := 1
   OUTA[WAKEUP]  := 0
 
@@ -269,9 +270,11 @@ PUB MAIN | idx, response,  pressType, bPressed
       OFF  :
         if bPressed
           mainState := TURNING_ON
+        if acqMode == TRIG AND PEBBLE.TRIGGER_START(interval)  
+          mainState := TURNING_ON
         else
           !OUTA[WAKEUP]
-          PAUSE_MS(10)
+          PAUSE_MS(100)
   
       TURNING_ON :
         TURN_SYSTEM_ON
@@ -294,18 +297,23 @@ PUB MAIN | idx, response,  pressType, bPressed
         if bPressed
           TURN_SYSTEM_OFF
           mainState := OFF
+        if acqMode == TRIG AND PEBBLE.TRIGGER_END(recordLength)
+          mainState := OFF
         
       TURNING_OFF :
         TURN_SYSTEM_OFF
         mainState := OFF
 
-    
 PUB TURN_SYSTEM_ON | displayTime
 ' these are the things that need to happen EVERY time we come out of sleep
 ' sleep is all things turned off
   serialCogId   := -1
   adcCogId      := -1
   slaveCogId    := -1
+
+  STOP_WATCHDOG     ' stop watchdog before changing clock speed
+  PEBBLE._rc_to_fast_prop
+  START_WATCHDOG    ' we need to start the watch dog with the new clockspeed
 
   PEBBLE.I2C_INIT               ' when we wakeup gumstix should be off
   PEBBLE.GUMSTIX_ON             ' sak preferes to have gumstix on right away
@@ -396,8 +404,10 @@ PUB TURN_SYSTEM_OFF | i
 
   PEBBLE.SET_EXPANDER_TO_LOW_POWER
   PAUSE_MS(200)
+  
+  STOP_WATCHDOG     ' stop watchdog before changing clock speed
   PEBBLE._rcslow_prop
-  'PEBBLE.
+  START_WATCHDOG    ' we need to start the watch dog with the new clockspeed
 
 PUB FREE_COGS | idx, response
   response := cogs.freestring
@@ -414,7 +424,15 @@ PUB START_WATCHDOG
 '' method that starts a new watchdog timer in unique cog
 ' first stop any existing watchdog cogs then start the watchdog
   watchDogCogId := cognew(WATCHDOG, @watchDogStack)
-    
+
+PUB STOP_WATCHDOG
+' if watchdog is already running kill it; indicate this by setting id to -1
+  if watchDogCogId == -1
+    return              ' watchdog isn't running
+
+  cogstop(watchDogCogId)
+  watchDogCogId := -1
+      
 PUB BUTTON_PRESSED  : buttonPressed 
 ' method that checks to see the button has been pressed.
 ' lights LED1 when
@@ -454,8 +472,7 @@ PUB BUTTON_PRESSED  : buttonPressed
 
 PUB WATCHDOG | timeSincePet, programMode, i
 '' Watchdog function.  Should be started in its own cog.
-'' This watchdog does 1 things.
-'' 1.  it watches a shared memory location (single LONG in HUB).  If that location
+'' This watchdog does 1 thing it watches a shared memory location (single LONG in HUB).  If that location
 ''     isn't updated evert WATCH_DOG_TIMEOUT_CNT this cog will reboot the prop.
 
   watchDogTimer := CNT          ' init time so we don't reboot right away
@@ -465,7 +482,7 @@ PUB WATCHDOG | timeSincePet, programMode, i
 
     ' Check for watchdog timeout
 '    if (CNT - watchDogTimer) > WATCH_DOG_TIMEOUT_CNT 
-    if (CNT - watchDogTimer) > (clkfreq/1000*WATCH_DOG_TIMEOUT_MS) 
+    if (CNT - watchDogTimer) > (clkfreq/1000 * WATCH_DOG_TIMEOUT_MS) 
       REBOOT
 
 

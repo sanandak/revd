@@ -1108,6 +1108,20 @@ PUB WAIT_FOR_TIME(modValue)
   OLED_ON
   OLED_WRITE_LINE1(string("Waking System."))
 
+PUB TRIGGER_START(interval)
+' method that checks the current RTC time and returns true if we are within 20 seconds of the start minute
+  READ_RTC_TIME
+  if (rtcTime[1]//interval)==(interval - 1) AND rtcTime[0] > 40
+    return TRUE              
+
+PUB TRIGGER_END(recordLength)
+' method that watches the time and returns true when the current time equals the record lengh-
+' this means we've recorded what we should and should now turn off
+  if (rtcTime[0] > recordLength)
+    return TRUE             
+    
+
+        
 PUB SWITCHED_ON(sleepPress, continuousPress, interval) 
 {
   if INA[REED_SWITCH] == 0      ' is button "pressed"?
@@ -1275,12 +1289,12 @@ PRI _rc_to_med_prop
   waitcnt(120000 + cnt)                                                         ' wait 10ms for PLL/crystal to stabilize
   clkset(%0_1_1_01_101, 20_000_000)                                             ' 20MHz
 
-PRI _rc_to_fast_prop
+PUB _rc_to_fast_prop
 '' put propeller into a fast speed (100MHz), intended to be used after propeller was put in rcslow/rcfast mode
 
   clkset(%0_1_1_01_000, 12_000_000)                                             ' turn on PLL/crystal, but don't use it
   waitcnt(120000 + cnt)                                                         ' wait 10ms for PLL/crystal to stabilize
-  clkset(%0_1_1_01_111, 100_000_000)                                             ' 80MHz
+  clkset(%0_1_1_01_111, 100_000_000)                                            ' 100MHz
 
 PRI _slow_prop
 '' put propeller into slowest power save speed using XTAL
