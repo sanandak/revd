@@ -27,7 +27,7 @@ CON ' VERSION
   VERSION = $01 ' this is a single byte    
                                
 CON ' GPS constants including bit on I2C expander
-  EXTERNAL_OSC      = 0
+  EXT_OSC      = 0
   PERIOD_LENGTH     = 16  ' number of seconds over which to collect oscillator data
   GPS_PPS           = 1
   GPS_RX_FROM       = 2
@@ -66,9 +66,6 @@ CON ' ON/OFF switch constants
   WAKEUP            = 14
   RADIO_CS          = 26
   
-CON ' Acq enumerations
- #0, TRIGGERED, CONTINUOUS, STAY_ASLEEP
-
 CON ' ADC constants
   
   ADC_DRDYOUT =  5
@@ -93,9 +90,8 @@ CON ' PGA constants
   GAIN_D = 10
 
 CON ' MUX constants
-
-  INTERNAL = 0
-  EXTERNAL = 1  
+  INT = 0
+  EXT = 1  
 
 CON ' channel constants
   CHANNEL_A = %0001
@@ -178,10 +174,17 @@ CON ' gps buffer filled state
   MY_FALSE = 0
   
 CON ' main state machine states; some are also used as acqState states
-  #0, OFF, TURNING_ON, ON, TURNING_OFF, TRIG, CONT   ' these are state machine states and a few are possible acqMode possibilities
+  #0, OFF, TURNING_ON, ON, TURNING_OFF    ' main state machine states
+  #0, BOOT, SLEEP, TRIG, CONT                   ' acqMode states
 
 CON ' button states
   #0, WAITING_FOR_PRESS, WAITING_FOR_RELEASE, BUTTON_HOLDOFF   ' these are the button press/menu states
+
+CON ' menu states'
+  #0, MENU_NONE, MENU_PROMPT_TRIG, MENU_PROMPT_CONT, MENU_PROMPT_SHUT, MENU_CONFIRM, MENU_INFORM
+  MENU_TIMEOUT_TIME  = 5000 * ONE_MS  ' stay in a menu for this time before timing out'
+  MENU_ACTIVATE_TIME = 2000 * ONE_MS   ' button press of this time will move to next screen or confirm'
+  #0, PEBBLE_TRIG, PEBBLE_CONT, PEBBLE_SHUT ' possible requested states'
 
 CON ' Reed Switch constants
   WATCH_DOG_TIMEOUT_MS =   15_000       ' time in ms allowed to elapse before watchdog reboots system
@@ -189,12 +192,14 @@ CON ' Reed Switch constants
   REBOOT_TIMEOUT_MS    =    5_000       ' number of ms the button must be pressed ONCE in PROGRAMMING state to force a software reboot
   SLEEP_PRESS_MS       =    2_000       ' number of ms the button must be pressed to put the unit to sleep when it is in continuous mode
   CONTINUOUS_PRESS_MS  =    5_000       ' number of ms the button must be pressed to put the unit in to continuous mode
-
+  MAG_ACC_TIMER_MS     =      500       ' number of ms between MAG/ACC readings
+  
   WATCH_DOG_TIMEOUT_CNT =  WATCH_DOG_TIMEOUT_MS  * ONE_MS 
   PROGRAM_TIMEOUT_CNT   =  PROGRAM_TIMEOUT_MS    * ONE_MS
   REBOOT_TIMEOUT_CNT    =  REBOOT_TIMEOUT_MS     * ONE_MS
   SLEEP_PRESS_CNT       =  SLEEP_PRESS_MS        * ONE_MS
   CONTINUOUS_PRESS_CNT  =  CONTINUOUS_PRESS_MS   * ONE_MS  
+  MAG_ACC_TIMER_CNT     =  MAG_ACC_TIMER_MS      * ONE_MS
   
 DAT ' oled messages
   sleepMsg   byte   "Sleeping System.", 0
@@ -212,9 +217,11 @@ OBJ
   
 VAR
   byte mainCogId, serialCogId, adcCogId, slaveCogId, watchDogCogId
-  byte mainState, acqMode, buttonState, oledPower
+  byte mainState, acqMode, buttonState
+  byte pebbleState, menuState, pebbleStateRequested
   byte clockSetYet, lockType
   byte edgeDetector
+  byte auxIdx
   byte inUartBuf[UART_SIZE], inUartIdx, ptrIdx, uartState, inUartPtr[MAX_COMMANDS]
   byte oLedBuf[20] ' set aside some room for the oled 
   byte sramParms[64]
@@ -224,7 +231,8 @@ VAR
   word year, month, day, hour, minute, second, utcValid, gpsValid, fixStat
           
   long pressTime, releaseTime, led1on, onTime
-
+  long menuPressTime ' time when the menu button was pressed - use for timeout'
+  long magAccTimer
   long change, vcxoError, k
   long watchDogTimer, watchDogStack[16]
   ' ubxBufferAddress is the HUB memory location of gps data stored by ubx object
@@ -247,75 +255,114 @@ VAR
                                                                          ' moved from the ADC cog to HUB then from HUB to the PASM Slave
                                                                          ' cog where they are written out to the gumstix
 
-PUB MAIN | idx, response,  pressType, bPressed
+PUB MAIN | bPressed, previousState, lastRTCcheck
 ' the main method here is a simple state machine
     
   mainCogId     := cogid
-  STOP_WATCHDOG     ' we need to start the watch dog with the new clockspeed; but stop it first
+  serialCogId   := -1
   START_WATCHDOG
+  PEBBLE.I2C_INIT               ' set up the I2C pin definitions only once
 
   DIRA[WAKEUP]  := 1
   OUTA[WAKEUP]  := 0
 
-  mainState := TURNING_ON
-  'mainState := OFF
-  
+  mainState := TURNING_ON       ' mainState is NOT stored in SRAM
+  acqMode   := BOOT             ' this indicates first boot
+
   repeat
-
-    PET_WATCHDOG                 ' do this every time through the loop.
-    bPressed := BUTTON_PRESSED   ' check for button press
-
+    PET_WATCHDOG                ' do this every time through the loop.
+    bPressed := BUTTON_PRESSED  ' check for button press
 
     case mainState
-      OFF  :
-        if bPressed
-          mainState := TURNING_ON
-        if acqMode == TRIG AND PEBBLE.TRIGGER_START(interval)  
-          mainState := TURNING_ON
-        else
-          !OUTA[WAKEUP]
-          PAUSE_MS(100)
-  
-      TURNING_ON :
-        TURN_SYSTEM_ON
-        PRINT_SYSTEM_PARAMETERS
+      OFF  :                    ' mainState can only be OFF if the acqMode is SLEEP or we are sleeping between triggers
         case acqMode
-          OFF  :
-            UARTS.STR(DEBUG, string(13, "Leaving for turning off"))
-            mainState := TURNING_OFF
+          SLEEP : 
+            if bPressed                      'wake up from sleep and enter continuous mode
+              mainState     := TURNING_ON
+              acqMode       := TRIG
+
+          TRIG  :                            'wake up from sleep because trigger time arrived
+            if (CNT - lastRTCcheck) > clkfreq                      ' avoid checking the RTC too often
+              READ_RTC
+              lastRTCcheck := CNT
+              if (rtcMinute//interval)==(interval - 1) AND (rtcSecond > 40)
+                mainState  := TURNING_ON
+                acqMode    := TRIG
+
+            if bPressed                      'wake up from sleep and enter triggered mode because the button was pushed
+              mainState    := TURNING_ON
+              acqMode      := TRIG
+
+
+      TURNING_ON :              ' always pass through this state on the way to ON; gives an opportunity to print current acqMode
+        WAKE_SYSTEM(acqMode)
+        UARTS.STR(DEBUG, string(13, "Turning ON: "))
+        case acqMode
           TRIG :
-            UARTS.STR(DEBUG, string(13, "Leaving for triggered"))
+            UARTS.STR(DEBUG, string("Triggered"))
             START_ACQUISITION
             mainState := ON
           CONT :
-            UARTS.STR(DEBUG, string(13, "In CONT, entering START_ACQUISITION"))
+            UARTS.STR(DEBUG, string("Continuous"))
             START_ACQUISITION
             mainState := ON
+          SLEEP :
+            UARTS.STR(DEBUG, string("Sleep"))
+            mainState := TURNING_OFF
+          OTHER :
+            UARTS.STR(DEBUG, string("something is wrong; shouldn't get here"))
+            PAUSE_MS(5000)
+            mainState := TURNING_OFF
 
-      ON:
+
+      ON:                       ' this is where the work gets done; but we can also change states from here
         DO_SOMETHING_USEFUL
-        if bPressed
-          TURN_SYSTEM_OFF
-          mainState := OFF
-        if acqMode == TRIG AND PEBBLE.TRIGGER_END(recordLength)
-          mainState := OFF
+
+        case acqMode
+          TRIG :
+            if ((rtcMinute//interval) == 0) AND (rtcSecond > recordLength)
+              mainState := TURNING_OFF
+
+            if bPressed         ' if button pressed while in TRIG mode go to cont mode
+              UARTS.STR(DEBUG, string(13, "Leaving T for C"))
+              acqMode       := CONT
+              mainState     := ON
+              STORE_PARAMETERS_TO_SRAM
+
+          CONT :              ' we must be in triggered mode headed toward continuous
+            if bPressed         ' if button pressed while in TRIG mode go to cont mode
+              UARTS.STR(DEBUG, string(13, "Leaving C for SLEEP"))
+              acqMode       := SLEEP
+              mainState     := TURNING_OFF
+              STORE_PARAMETERS_TO_SRAM
+              
+          OTHER :
+              UARTS.STR(DEBUG, string(13, "Shutting down because of we don't know what's going on."))
+              mainState := TURNING_OFF
+          
         
       TURNING_OFF :
         TURN_SYSTEM_OFF
         mainState := OFF
 
-PUB TURN_SYSTEM_ON | displayTime
+
+PUB TURN_SYSTEM_ON
+  PEBBLE.I2C_INIT               ' when we wakeup gumstix should be off
+  GET_PARAMETERS_FROM_SRAM
+'  WAKE_SYSTEM(-1)
+  
+PUB WAKE_SYSTEM(newAcqMode) | displayTime 
+
 ' these are the things that need to happen EVERY time we come out of sleep
 ' sleep is all things turned off
   serialCogId   := -1
   adcCogId      := -1
   slaveCogId    := -1
 
-  STOP_WATCHDOG     ' stop watchdog before changing clock speed
-  PEBBLE._rc_to_fast_prop
-  START_WATCHDOG    ' we need to start the watch dog with the new clockspeed
+  'STOP_WATCHDOG     ' stop watchdog before changing clock speed
+  'PEBBLE._rc_to_fast_prop
+  'START_WATCHDOG    ' we need to start the watch dog with the new clockspeed
 
-  PEBBLE.I2C_INIT               ' when we wakeup gumstix should be off
   PEBBLE.GUMSTIX_ON             ' sak preferes to have gumstix on right away
   PEBBLE.OLED_ON                ' turn on and init oled
   PEBBLE.GPS_ON
@@ -325,10 +372,26 @@ PUB TURN_SYSTEM_ON | displayTime
 
   LAUNCH_SERIAL_COG             ' handle the 2 serial ports- debug and GPS
   PAUSE_MS(1_000)
-  UARTS.STR(DEBUG, string(13, "$PSMSG, Waking system."))
-
-  GET_AND_PRINT_PARAMETERS
+  UARTS.STR(DEBUG, string(13, "$PSMSG, Waking system: "))
+  READ_RTC
+  PRINT_RTC_TIME
   PET_WATCHDOG
+
+  if newAcqMode == BOOT         ' at first boot we need to get parameters 
+    GET_PARAMETERS_FROM_SRAM
+    'CONFIG_GPS
+  else
+    acqMode := newAcqMode       ' otherwise we need to save current params to SRAM                    
+    STORE_PARAMETERS_TO_SRAM
+
+  PRINT_SYSTEM_PARAMETERS
+  UARTS.STR(DEBUG, string(13, "acqMode is: "))
+  case acqMode
+    SLEEP :  UARTS.STR(DEBUG, string("SLEEP"))
+    TRIG  :  UARTS.STR(DEBUG, string("TRIG"))
+    CONT  :  UARTS.STR(DEBUG, string("CONT"))
+    OTHER :  UARTS.STR(DEBUG, string("UNKN"))
+
 
   CONFIG_GPS
   PET_WATCHDOG
@@ -339,19 +402,21 @@ PUB TURN_SYSTEM_ON | displayTime
   PET_WATCHDOG
   waitcnt(displayTime += clkfreq<<1)
 
+  ' set up mag and acc measurements- run these well above our sample rate and we'll get data when we can.
+  PEBBLE.MAG_ACC_ON
+  PEBBLE.LSM_INIT
   PET_WATCHDOG
 
   clockSetYet := FALSE          ' when we first boot we have no idea what the lock status is/was
-  PEBBLE.OLED_WRITE_LINE1(string("Getting GPS Lock"))
     
 ' setup counter B in this cog to track the number of system counts between
 ' the rising GPS and when we get over to read it.
 ' this frees us from having a cog dedicated to just watching the gpspps
 
-  CTRB[30..26] := %01000                                'ctrb module to POS detector;                                                        
-  CTRB[5..0]   := GPS_PPS                               'add frqb to phsb every clock cycle that GPS_PPS high
-  FRQB := 1                                              'this will keep track of the number of system counts
-  PHSB~                                                 'from the rising edge of GPS
+  CTRB[30..26] := %01000                                ' ctrb module to POS detector;                                                        
+  CTRB[5..0]   := GPS_PPS                               ' add frqb to phsb every clock cycle that GPS_PPS high
+  FRQB := 1                                             ' this will keep track of the number of system counts
+  PHSB~                                                 ' from the rising edge of GPS
 
   PEBBLE.LEDS_OFF                ' turn on the LEDs to indicate we are awake
   GET_GPS_LOCK
@@ -377,7 +442,10 @@ PUB TURN_SYSTEM_ON | displayTime
   UARTS.STR(DEBUG, string(13, "$PSMSG, "))
   UARTS.STR(DEBUG, @versionMsg)
 
+  'TEST_MAG_ACC
+  
 PUB TURN_SYSTEM_OFF | i
+'  STORE_PARAMETERS_TO_SRAM
   UARTS.STR(DEBUG, string(13, "$PSMSG. Sleeping system.  Use magnet to wake or wait for trigger."))
   repeat 3   ' why is this hear?
     UARTS.STR(DEBUG, string(13, "$PSMSG. SHUTDOWN"))
@@ -405,9 +473,82 @@ PUB TURN_SYSTEM_OFF | i
   PEBBLE.SET_EXPANDER_TO_LOW_POWER
   PAUSE_MS(200)
   
-  STOP_WATCHDOG     ' stop watchdog before changing clock speed
-  PEBBLE._rcslow_prop
-  START_WATCHDOG    ' we need to start the watch dog with the new clockspeed
+  'STOP_WATCHDOG     ' stop watchdog before changing clock speed
+  'PEBBLE._rcslow_prop
+  'START_WATCHDOG    ' we need to start the watch dog with the new clockspeed
+
+PUB MENU_SYSTEM(bPressed)
+' method that displays and handles the menu system
+   ' normally display time (MENU_NONE), state 0
+    ' if swiped, display prompt to switch to state 1
+    '    if swiped in state 1, display prompt to switch to state 2, etc
+    '    in state N, switch back to state 0'
+    ' if in state 1 to N, and it times out, then display a confirm message'
+    ' if confirmed, then switch to that state'
+    case menuState
+      MENU_NONE        :
+        if bPressed ' PHSA > MENU_ACTIVATE_TIME  'prompt the user (in DO_SOMETHING_USEFUL)'
+          menuState := MENU_PROMPT_TRIG
+          menuPressTime := cnt
+          PHSA := 0
+          UARTS.STR(DEBUG, string(13, "In NONE -> TRIG"))
+      
+      MENU_PROMPT_TRIG : ' In xxxx --> TRIG'
+        if (cnt - menuPressTime) > MENU_TIMEOUT_TIME  'User wants this state... '
+          PHSA := 0
+          menuState := MENU_CONFIRM
+          pebbleStateRequested := PEBBLE_TRIG
+          menuPressTime := cnt
+          UARTS.STR(DEBUG, string(13, "In TRIG -> CONFIRM"))
+        if PHSA > MENU_ACTIVATE_TIME ' User pressed button during prompt - go on to next state'
+          PHSA := 0
+          menuState := MENU_PROMPT_CONT
+          menuPressTime := cnt
+          UARTS.STR(DEBUG, string(13, "In TRIG -> CONT"))
+
+
+      MENU_PROMPT_CONT : ' In xxxx --> CONT'
+        if (cnt - menuPressTime) > MENU_TIMEOUT_TIME  'User wants this state... '
+          PHSA := 0
+          menuState := MENU_CONFIRM
+          pebbleStateRequested := PEBBLE_CONT
+          menuPressTime := cnt
+          UARTS.STR(DEBUG, string(13, "In CONT -> CONFIRM"))
+        if PHSA > MENU_ACTIVATE_TIME ' User pressed button during prompt - go to next state'
+          PHSA := 0
+          menuState := MENU_PROMPT_SHUT
+          menuPressTime := cnt
+          UARTS.STR(DEBUG, string(13, "In CONT -> SHUT"))
+
+      MENU_PROMPT_SHUT : ' In xxxx --> SHUT'
+        if (cnt - menuPressTime) > MENU_TIMEOUT_TIME  'User wants this state... '
+          PHSA := 0
+          menuState := MENU_CONFIRM
+          pebbleStateRequested := PEBBLE_SHUT
+          menuPressTime := cnt
+          UARTS.STR(DEBUG, string(13, "In SHUT -> CONFIRM"))
+        if PHSA > MENU_ACTIVATE_TIME ' User pressed button during prompt - go to next state'
+          PHSA := 0
+          pebbleStateRequested := pebbleState
+          menuPressTime := cnt
+          menuState := MENU_NONE
+          UARTS.STR(DEBUG, string(13, "In SHUT -> NONE"))
+
+      MENU_CONFIRM     : ' To xxxx: Confirm!'
+        if (cnt - menuPressTime) > MENU_TIMEOUT_TIME
+          PHSA := 0
+          menuState := MENU_NONE
+          UARTS.STR(DEBUG, string(13, "In CONFIRM -> NONE"))
+
+        if PHSA > MENU_ACTIVATE_TIME
+          PHSA := 0
+          menuState := MENU_INFORM
+          pebbleState := pebbleStateRequested
+
+      MENU_INFORM      : ' inform the user of their choice'
+        if (cnt - menuPressTime) > MENU_TIMEOUT_TIME
+          PHSA := 0
+          menuState := MENU_NONE
 
 PUB FREE_COGS | idx, response
   response := cogs.freestring
@@ -574,7 +715,8 @@ PUB DO_SOMETHING_USEFUL | rxByte, response, idx
        PROCESS_UART
        uartState := WAITING_FOR_START
     
-     
+
+
   edgeDetector := ((edgeDetector << 1) | INA[GPS_PPS] ) & %11    
   case edgeDetector 
     %01 : ' rising edge -> grab phsb
@@ -582,9 +724,57 @@ PUB DO_SOMETHING_USEFUL | rxByte, response, idx
       UPDATE_TIME_AND_DATE                   ' KEEP IN MIND WE ALWAYS UPDATE TIME/DATE ON THE PPS following OUR MESSAGE SO WE ARE BEHIND ONE SECOND
       PRINT_TIME_AND_DATE
       SEND_AUX_PACKET
+{      case menuState
+        MENU_NONE        :
+          PRINT_TIME_AND_DATE
+        MENU_PROMPT_TRIG :
+          PEBBLE.OLED_WRITE_LINE1(string("WAIT->TRIGGERED "))
+          PEBBLE.OLED_WRITE_LINE2(string("SWIPE-->MORE OPT"))
+        MENU_PROMPT_CONT :
+          PEBBLE.OLED_WRITE_LINE1(string("WAIT->CONTINUOUS"))
+          PEBBLE.OLED_WRITE_LINE2(string("SWIPE-->MORE OPT"))
+        MENU_PROMPT_SHUT :
+          PEBBLE.OLED_WRITE_LINE1(string("WAIT->SHUTDOWN  "))
+          PEBBLE.OLED_WRITE_LINE2(string("SWIPE-->MORE OPT"))
+        MENU_CONFIRM     :
+          if pebbleStateRequested == PEBBLE_TRIG
+            PEBBLE.OLED_WRITE_LINE1(string("SWITCH TO TRIG? "))
+            PEBBLE.OLED_WRITE_LINE2(string("SWIPE TO CONFIRM"))
+          if pebbleStateRequested == PEBBLE_CONT
+            PEBBLE.OLED_WRITE_LINE1(string("SWITCH TO CONT? "))
+            PEBBLE.OLED_WRITE_LINE2(string("SWIPE TO CONFIRM"))
+          if pebbleStateRequested == PEBBLE_SHUT
+            PEBBLE.OLED_WRITE_LINE1(string("SWITCH TO SHUT? "))
+            PEBBLE.OLED_WRITE_LINE2(string("SWIPE TO CONFIRM"))
+        MENU_INFORM      :
+          if pebbleStateRequested == PEBBLE_TRIG
+            PEBBLE.OLED_WRITE_LINE1(string("SWITCHING TO    "))
+            PEBBLE.OLED_WRITE_LINE2(string("TRIGGERED MODE  "))
+          if pebbleStateRequested == PEBBLE_CONT
+            PEBBLE.OLED_WRITE_LINE1(string("SWITCHING TO    "))
+            PEBBLE.OLED_WRITE_LINE2(string("CONTINUOUS MODE "))
+          if pebbleStateRequested == PEBBLE_SHUT
+            PEBBLE.OLED_WRITE_LINE1(string("SWITCHING TO    "))
+            PEBBLE.OLED_WRITE_LINE2(string("SHUTDOWN        "))
+}
       
     %10 : ' falling edge now we can reset phsb since it won't increment until PPS goes high again
       PHSB := 0
+
+  ' if it's time for a MAG/ACC measurement, go get it
+  if (CNT - magAccTimer) > MAG_ACC_TIMER_CNT
+    outa[wakeup]  := 1          ' indicate we entered MAG/ACC stuff
+    magAccTimer := CNT
+    auxBuffer1[auxIdx++] := PEBBLE.GET_ACC_X
+    auxBuffer1[auxIdx++] := PEBBLE.GET_ACC_Y
+    auxBuffer1[auxIdx++] := PEBBLE.GET_ACC_Z
+    PEBBLE.READ_MAG             ' we need to read the mag before the others are populated.  
+    auxBuffer1[auxIdx++] := PEBBLE.GET_MAG_X
+    auxBuffer1[auxIdx++] := PEBBLE.GET_MAG_Y
+    auxBuffer1[auxIdx++] := PEBBLE.GET_MAG_Z
+    auxBuffer1[auxIdx++] := PEBBLE.READ_MAG_TEMP
+    outa[wakeup]  := 0
+    
 
   ' here we process all bytes sitting in the gps buffer -
   ' and we stay in this repeat until the uart buffer is empty OR we've reached the end of the packet
@@ -596,12 +786,12 @@ PUB DO_SOMETHING_USEFUL | rxByte, response, idx
   if response == UBX#RXMRAW                            ' have we collected all the data in this second?
     UARTS.STR(DEBUG, string(13,"$PSMSG, FIFO: "))
     UARTS.DEC(DEBUG, blocksInFIFO)                     ' if the gps buffer is empty put something into it
-    if recordLength == 0
-      UARTS.STR(DEBUG, string( " Mode: C"))
-    else
-      UARTS.STR(DEBUG, string( " Mode: "))
-      UARTS.DEC(DEBUG, recordLength)
-        
+    case acqMode
+      CONT  : UARTS.STR(DEBUG, string( " Mode: C"))
+      TRIG  : UARTS.STR(DEBUG, string( " Mode: T, "))
+              UARTS.DEC(DEBUG, recordLength)
+      OTHER : UARTS.STR(DEBUG, string( " Mode: UNKNOWN"))
+      
     if gpsDataToWrite == MY_FALSE                      ' have the data we put there previously been written?
       bytemove(@gpsBuffer, ubxBufferAddress, 1024)     ' copy that info into gpsBuffer
       'longfill(@gpsBuffer,      $FFFF_FFFF,      256)
@@ -640,11 +830,14 @@ PUB SEND_AUX_PACKET | idx, wakeUpMode, recTypeEnum, timeOfDayOn, timeOfDaySleep,
   longmove(@auxBuffer2 , @auxBuffer1 , 128)
   idx := 0
 
-  auxBuffer2.byte[idx++] := "P"
-  auxBuffer2.byte[idx++] := "A"
-  auxBuffer2.byte[idx++] := VERSION
   auxBuffer2.byte[idx++] := validStatus
+  auxBuffer2.byte[idx++] := VERSION
+  auxBuffer2.byte[idx++] := "A"
+  auxBuffer2.byte[idx++] := "P"
 
+  auxBuffer2.byte[idx++] := 0 'reserved
+  auxBuffer2.byte[idx++] := interval
+  auxBuffer2.byte[idx++] := recordLength
   case recTypeEnum
     0 : auxBuffer2.byte[idx++] := 0 ' continuous
     1 : auxBuffer2.byte[idx++] := 1 ' triggered
@@ -653,26 +846,22 @@ PUB SEND_AUX_PACKET | idx, wakeUpMode, recTypeEnum, timeOfDayOn, timeOfDaySleep,
     4 : auxBuffer2.byte[idx++] := 4 ' radio
     OTHER : auxBuffer2.byte[idx++] := 0
      
-  auxBuffer2.byte[idx++] := recordLength
-  auxBuffer2.byte[idx++] := interval
-  auxBuffer2.byte[idx++] := 0 'reserved
 
-  auxBuffer2.byte[idx++] := wakeUpMode
-  auxBuffer2.byte[idx++] := timeOfDayOn
-  auxBuffer2.byte[idx++] := timeOfDaySleep
   auxBuffer2.byte[idx++] := radioOnDuration
+  auxBuffer2.byte[idx++] := timeOfDaySleep
+  auxBuffer2.byte[idx++] := timeOfDayOn
+  auxBuffer2.byte[idx++] := wakeUpMode
 
   auxBuffer2[3] := dacValue
-
   auxBuffer2[4] := rtcYMD
   auxBuffer2[5] := rtcHMS
-
   auxBuffer2[6] := 0 ' reserved
   auxBuffer2[7] := 0 ' reserved
 
-  auxDataToWrite := MY_TRUE
-    
+  auxIdx        := 8 ' our first data should go here
+
   longfill(@auxBuffer1 , 0 , 128)
+  auxDataToWrite := MY_TRUE
     
 PUB UPDATE_TIME_AND_DATE | isLeapYear
 '' get the RTC AND GPS time
@@ -856,7 +1045,7 @@ PUB READ_RTC
   rtcSecond:= BYTE[rtcAddr][0]
 
 PUB SETUP_AND_LAUNCH_ADC(_sps, gA, gB, gC, gD, aMux, bMux, cMux, dMux) | sampleRateEnum, response
-'' store system wide values for sps, gain, and internal/external 1 for external; 0 for internal
+'' store system wide values for sps, gain, and INT/EXT 1 for EXT; 0 for INT
 '' set the gain and voltage trim (0)
 '' set sample rate and launch ADC cog
 '' method that loads some variables and launches the ADC cog
@@ -1104,8 +1293,8 @@ PUB PRINT_EUI
   UARTS.STR(DEBUG, string(13,"$PSEUI, "))
   UARTS.STR(DEBUG, @euiMsg[4])
 
-PUB READ_RTC_TIME
-  rtcAddr:= PEBBLE.READ_RTC_TIME
+'PUB READ_RTC_TIME
+'  rtcAddr:= PEBBLE.READ_RTC_TIME
 
 PUB GET_PARAMETERS_FROM_SRAM | response 
 ' collect parameters from the SRAM; this only works if we haven't lost power because SRAM
@@ -1144,12 +1333,12 @@ PUB GET_PARAMETERS_FROM_SRAM | response
     gainB        :=  1     
     gainC        :=  1     
     gainD        :=  10    
-    sourceA      :=  INTERNAL 
-    sourceB      :=  INTERNAL 
-    sourceC      :=  INTERNAL 
-    sourceD      :=  INTERNAL 
+    sourceA      :=  INT 
+    sourceB      :=  INT 
+    sourceC      :=  INT 
+    sourceD      :=  INT 
     interval     :=  2        
-    recordLength :=  0     
+    recordLength :=  10     
     acqMode      := CONT
     STORE_PARAMETERS_TO_SRAM
     UARTS.STR(DEBUG, string(13,"Wrote new parameters to SRAM."))
@@ -1185,18 +1374,18 @@ PUB STORE_PARAMETERS_TO_SRAM
   
 
 PUB WRITE_DEFAULT_PARAMS_TO_SRAM
-  sampleRate := 1000
-  gainA      :=    1
-  gainB      :=    1
-  gainC      :=    1
-  gainD      :=   10
-  sourceA    := INTERNAL
-  sourceB    := INTERNAL
-  sourceC    := INTERNAL
-  sourceD    := INTERNAL
-  interval   := 30 ' 2 
-  recordLength := 10
-  acqMode    := CONT
+  sampleRate   := 1000
+  gainA        :=    1
+  gainB        :=    1
+  gainC        :=    1
+  gainD        :=   10
+  sourceA      :=  INT
+  sourceB      :=  INT
+  sourceC      :=  INT
+  sourceD      :=  INT
+  interval     :=    2 
+  recordLength :=   10
+  acqMode      := CONT
   STORE_PARAMETERS_TO_SRAM
   UARTS.STR(DEBUG, string(13,"$PSMSG,Default paramaters stored to SRAM."))
 
@@ -1214,34 +1403,38 @@ PUB PRINT_SYSTEM_PARAMETERS
   UARTS.PUTC(DEBUG, COMMA)
   UARTS.DEC(DEBUG, gainD)
   UARTS.PUTC(DEBUG, COMMA)
-  if sourceA == INTERNAL
-    UARTS.STR(DEBUG, string("INTERNAL"))
-  if sourceA == EXTERNAL
-    UARTS.STR(DEBUG, string("EXTERNAL"))
+  if sourceA == INT
+    UARTS.STR(DEBUG, string("INT"))
+  if sourceA == EXT
+    UARTS.STR(DEBUG, string("EXT"))
   UARTS.PUTC(DEBUG, COMMA)
-  if sourceB == INTERNAL
-    UARTS.STR(DEBUG, string("INTERNAL"))
-  if sourceB == EXTERNAL
-    UARTS.STR(DEBUG, string("EXTERNAL"))
+  if sourceB == INT
+    UARTS.STR(DEBUG, string("INT"))
+  if sourceB == EXT
+    UARTS.STR(DEBUG, string("EXT"))
   UARTS.PUTC(DEBUG, COMMA)
-  if sourceC == INTERNAL
-    UARTS.STR(DEBUG, string("INTERNAL"))
-  if sourceC == EXTERNAL
-    UARTS.STR(DEBUG, string("EXTERNAL"))
+  if sourceC == INT
+    UARTS.STR(DEBUG, string("INT"))
+  if sourceC == EXT
+    UARTS.STR(DEBUG, string("EXT"))
   UARTS.PUTC(DEBUG, COMMA)
-  if sourceD == INTERNAL
-    UARTS.STR(DEBUG, string("INTERNAL"))
-  if sourceD == EXTERNAL
-    UARTS.STR(DEBUG, string("EXTERNAL"))
+  if sourceD == INT
+    UARTS.STR(DEBUG, string("INT"))
+  if sourceD == EXT
+    UARTS.STR(DEBUG, string("EXT"))
   UARTS.PUTC(DEBUG, COMMA)
   UARTS.DEC(DEBUG, interval)
   UARTS.PUTC(DEBUG, COMMA)
   UARTS.DEC(DEBUG, recordLength)
   UARTS.PUTC(DEBUG, COMMA)
-  UARTS.DEC(DEBUG, acqMode)
-
+  case acqMode
+    SLEEP : UARTS.STR(DEBUG, string("SLEEP"))
+    TRIG  : UARTS.STR(DEBUG, string("TRIG"))
+    CONT  : UARTS.STR(DEBUG, string("CONT"))
+    OTHER : UARTS.STR(DEBUG, string("Unknow"))
   
 PUB GET_GPS_LOCK | idx, response
+  PEBBLE.OLED_WRITE_LINE2(string("Getting GPS Lock"))
   idx := 0
 
   repeat
@@ -1262,7 +1455,7 @@ PUB GET_GPS_LOCK | idx, response
       response := UBX.READ_AND_PROCESS_BYTE(FALSE)
     until response == -1 OR response == UBX#RXMRAW
     
-  until clockSetYet OR idx == CONSTANT(3 * 60)
+  until clockSetYet OR idx == 15'CONSTANT(3 * 60)
 
   if clockSetYet == FALSE  
     UARTS.STR(DEBUG, string(13, "$PSMSG, Unable to get GPS lock or set RTC."))
@@ -1316,8 +1509,9 @@ PUB TEST_MAG_ACC | idx, measureTime
   idx := 0
   measureTime := cnt + clkfreq
   repeat
+    PET_WATCHDOG
     UARTS.PUTC(DEBUG, 13)
-    waitcnt(measureTime +=  CONSTANT(100_000_000/25))
+    waitcnt(measureTime +=  CONSTANT(100_000_000)) ' attempt to get 25hz data
     'if idx // 20 == 0
     '  UARTS.STR(DEBUG, string(13, "ACCx",9,"ACCy",9,"ACCz",9,"MAGx",9,"MAGy",9,"MAGz",9,"TEMP",13))
     'idx++
@@ -1340,7 +1534,6 @@ PUB TEST_MAG_ACC | idx, measureTime
     UARTS.PUTC(DEBUG, TAB)
     UARTS.DEC(DEBUG, PEBBLE.READ_MAG_TEMP)
 
-  
 PUB CALIBRATE_SYSTEM_CLOCK | e_time, b_time, diff
   repeat 15
     waitpne(0,constant(|<GPS_PPS), 0)    ' wait for pin to go high
@@ -1357,7 +1550,7 @@ PUB CAPTURE_VXCO_VALUES | i, t1, risingEdge, t2
 ' this method should run in its own cog
 ' setup counter A in this cog to count 20Mhz pulses
 ' this is used for discplining the VCXO
-  CTRA := %01010 << 26 + EXTERNAL_OSC   ' counter A in POSedge mode
+  CTRA := %01010 << 26 + EXT_OSC   ' counter A in POSedge mode
   FRQA := 1                             ' increment once per pulse
 
 '  uarts.str(DEBUG,string(13,"Waiting for PPS before disclipining VCXO."))
@@ -1428,8 +1621,8 @@ PUB CAPTURE_VXCO_VALUES | i, t1, risingEdge, t2
 PUB CALIBRATE_GPSDO | highDac, lowDac, highCount, lowCount, error
 ' uset CTRA briefly, to get a measurement of linear drift of the VCXO
 ' and to calculate a value for K our VCXO factor
-  CTRA := %01010 << 26 + EXTERNAL_OSC   ' counter A in POSedge mode
-  FRQA := 1                             ' increment once per pulse
+  CTRA := %01010 << 26 + EXT_OSC   ' counter A in POSedge mode
+  FRQA := 1                        ' increment once per pulse
 
   uarts.str(DEBUG,string(13,"Calibrating GPSDO."))
   uarts.str(DEBUG,string(13," DAC value   VCXO Meas."))
@@ -1520,142 +1713,6 @@ PUB PAUSE_MS(mS)
 
 PUB PAUSE_US(uS)
   waitcnt(clkfreq/1_000_000 * uS + cnt)
-
-PUB SPARE_PARTS
-{PUB WRITE_DEFAULT_PARAMS_TO_EEPROM
-  sampleRate := 1000
-  gainA      :=    1
-  gainB      :=    1
-  gainC      :=    1
-  gainD      :=   10
-  sourceA    := INTERNAL
-  sourceB    := INTERNAL
-  sourceC    := INTERNAL
-  sourceD    := INTERNAL
-  interval   := 2
-  recordLength := 10
-  STORE_PARAMETERS_TO_EEPROM
-  PEBBLE.WRITE_EEPROM_LONG(GPB_ADDRESS, $DEAD_BEEF)
-  UARTS.STR(DEBUG, string(13,"$PSMSG,Default paramaters stored to EEPROM."))
-  PEBBLE.OLED_WRITE_LINE1(string("WROTE TO EEPROM "))
-  PAUSE_MS(1500)
-}
-
-{PUB STORE_PARAMETERS_TO_EEPROM
-  PEBBLE.WRITE_EEPROM_LONG(SPS_ADDRESS, sampleRate)
-  PEBBLE.WRITE_EEPROM_LONG(GAIN_A_ADDRESS, gainA)
-  PEBBLE.WRITE_EEPROM_LONG(GAIN_B_ADDRESS, gainB)
-  PEBBLE.WRITE_EEPROM_LONG(GAIN_C_ADDRESS, gainC)
-  PEBBLE.WRITE_EEPROM_LONG(GAIN_D_ADDRESS, gainD)
-  PEBBLE.WRITE_EEPROM_LONG(SOURCE_A_ADDRESS, sourceA)
-  PEBBLE.WRITE_EEPROM_LONG(SOURCE_B_ADDRESS, sourceB)
-  PEBBLE.WRITE_EEPROM_LONG(SOURCE_C_ADDRESS, sourceC)
-  PEBBLE.WRITE_EEPROM_LONG(SOURCE_D_ADDRESS, sourceD)
-'  PEBBLE.WRITE_EEPROM_LONG(INTERVAL_ADDRESS, interval)  FIXME
-'  PEBBLE.WRITE_EEPROM_LONG(RECORD_ADDRESS, recordLength)  FIXME
-  }
-{        case PEBBLE.SWITCH_OFF(recordLength, second)
-          0 :
-            UARTS.STR(DEBUG, string(13, "Sleeping case: button pressed: "))
-            UARTS.DEC(DEBUG, PHSA)
-            recordLength := 10
-            mainState := SLEEP
-            PHSA := 0               ' clear before moving to new state
-          1 :                                            
-            UARTS.STR(DEBUG, string(13, "Sleeping case: continuous mode "))
-            recordLength := 0
-            mainState := ACQUISITION_MODE
-          2 :
-            UARTS.STR(DEBUG, string(13, "Sleeping case: end of record "))
-            recordLength := 10
-            PHSA := 0               ' clear before moving to new state
-            mainState := SLEEP
-}
-
-  { 'use this block of code to test the speed of the OLED.
-    ' looks like the spin code takes about 0.36ms for one byte
-    ' and 6.63ms for 16 characters of the OLED.   }
-    
-{  idx := 0
-  displayTime:=cnt+clkfreq
-  repeat
-    waitcnt(displayTime+=CONSTANT(100*ONE_MS))
-    response:= strsize(NUM.TOSTR(idx,NUM#DEC))
-    bytemove(@gpsMsg[16-response], NUM.TOSTR(idx,NUM#DEC), response)
-    PEBBLE.OLED_WRITE_LINE1(0, 1, @gpsMsg)
-    idx++
-}    
-
-{
-PUB TEST_RTC | setDow, setYear, setMon, setDay, setHour, setMin, setSec
-
-  setDow  :=    4
-  setYear := 2014
-  setMon  :=   11
-  setDay  :=    6
-  setHour :=   21
-  setMin  :=   46
-  setSec  :=   30
-
-  PEBBLE.SET_RTC_TIME(setYear, setMon, setDay, setHour, setMin, setSec, setDow)
-  UARTS.STR(DEBUG, string(13,"Setting RTC time: "))
-  UARTS.DEC(DEBUG, setYear)
-  UARTS.PUTC(DEBUG, "-")
-  UARTS.DEC(DEBUG, setMon)
-  UARTS.PUTC(DEBUG, "-")
-  UARTS.DEC(DEBUG, setDay)
-  UARTS.PUTC(DEBUG, SPACE)
-  UARTS.DEC(DEBUG, setHour)
-  UARTS.PUTC(DEBUG, COLON)
-  UARTS.DEC(DEBUG, setMin)
-  UARTS.PUTC(DEBUG, COLON)
-  UARTS.DEC(DEBUG, setSec)
-  UARTS.PUTC(DEBUG, SPACE)
-  UARTS.DEC(DEBUG, setDow)
-
-  repeat
-    UARTS.STR(DEBUG, string(13, "Going to sleep.",13))
-    PAUSE_MS(500)
-    PEBBLE.SLEEP(mainCogId)
-    PEBBLE.WAIT_FOR_TIME(2)
-    LAUNCH_SERIAL_COG                     ' handle the 2 serial ports- debug, and GPS
-    PAUSE_MS(200)
-    UARTS.STR(DEBUG, string(13, "System booted and ready for action.",13))
-    PEBBLE.OLED_WRITE_LINE1(0, 1, @bootMsg)
-    repeat 
-      rtcAddr := PEBBLE.READ_RTC_TIME
-      UARTS.STR(DEBUG, string(13,"Date and time: "))
-      UARTS.DEC(DEBUG, BYTE[rtcAddr][6]+2000)
-      UARTS.PUTC(DEBUG, SPACE)
-      UARTS.DEC(DEBUG, BYTE[rtcAddr][5])
-      UARTS.PUTC(DEBUG, SPACE)
-      UARTS.DEC(DEBUG, BYTE[rtcAddr][4])
-      UARTS.PUTC(DEBUG, SPACE)
-      UARTS.DEC(DEBUG, BYTE[rtcAddr][3])
-      UARTS.PUTC(DEBUG, SPACE)
-      UARTS.DEC(DEBUG, BYTE[rtcAddr][2])
-      UARTS.PUTC(DEBUG, SPACE)
-      UARTS.DEC(DEBUG, BYTE[rtcAddr][1])
-      UARTS.PUTC(DEBUG, SPACE)
-      UARTS.DEC(DEBUG, BYTE[rtcAddr][0])
-      UARTS.PUTC(DEBUG, SPACE)
-      PAUSE_MS(500)
-    until BYTE[rtcAddr][0] == 15    
-  
-
-}
-
-{      WAIT_FOR_WAKEUP  :
-        PEBBLE.WAIT_FOR_WAKEUP               ' this calls forces system to block until button pressed
-        LAUNCH_SERIAL_COG                     ' handle the 2 serial ports- debug, and GPS
-        PAUSE_MS(200)
-        UARTS.STR(DEBUG, string(13, "System booted and ready for action.",13))
-        PEBBLE.OLED_WRITE_LINE1(0, 1, @bootMsg)
-        START_ACQUISITION
-        mainState := ACQUISITION_MODE
-        PHSA      := 0
-}
-
 
 DAT ' day in each month for leap and non-leap year
   leapTable   byte  0, 31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30  ' leap year

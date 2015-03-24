@@ -995,7 +995,7 @@ PUB LSM_INIT | lsmPresent
   ' big endian (bit 6 =0)
   ' +-2g (bit4:5 = 0)
   ' High resolution (bit 3 =1)
-  WRITE_LSM_REG(ACC_ADDR, LSM303_CTRL_REG1_A, ORD1 | ORD0 | LPEN | XEN | YEN | ZEN)
+  WRITE_LSM_REG(ACC_ADDR, LSM303_CTRL_REG1_A, ORD2 | ORD0 | LPEN | XEN | YEN | ZEN) ' set to 100Hz; low power, Z,Y,X
   lsmPresent := READ_LSM_REG(ACC_ADDR, LSM303_CTRL_REG1_A)
   PAUSE_MS(1)
 
@@ -1108,20 +1108,21 @@ PUB WAIT_FOR_TIME(modValue)
   OLED_ON
   OLED_WRITE_LINE1(string("Waking System."))
 
-PUB TRIGGER_START(interval)
+PUB TRIGGER_START(interval) | lastRTCTime
 ' method that checks the current RTC time and returns true if we are within 20 seconds of the start minute
-  READ_RTC_TIME
-  if (rtcTime[1]//interval)==(interval - 1) AND rtcTime[0] > 40
-    return TRUE              
-
-PUB TRIGGER_END(recordLength)
+  if (CNT - lastRTCTime) > clkfreq                      ' avoid checking the RTC too often
+    READ_RTC_TIME
+    lastRTCTime := CNT
+    if (rtcTime[1]//interval)==(interval - 1) AND (rtcTime[0] > 40)
+      return TRUE              
+  return FALSE
+  
+PUB TRIGGER_END(recordLength, interval)
 ' method that watches the time and returns true when the current time equals the record lengh-
 ' this means we've recorded what we should and should now turn off
-  if (rtcTime[0] > recordLength)
+  if ((rtcTime[1]//interval) == 0) AND (rtcTime[0] > recordLength)
     return TRUE             
     
-
-        
 PUB SWITCHED_ON(sleepPress, continuousPress, interval) 
 {
   if INA[REED_SWITCH] == 0      ' is button "pressed"?
