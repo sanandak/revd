@@ -26,13 +26,49 @@ CON ' Clock mode settings
 CON ' VERSION
   VERSION = $01 ' this is a single byte    
                                
-CON ' GPS constants including bit on I2C expander
-  EXT_OSC      = 0
-  PERIOD_LENGTH     = 16  ' number of seconds over which to collect oscillator data
-  GPS_PPS           = 1
-  GPS_RX_FROM       = 2
-  GPS_TX_TO         = 3
+CON ' Pin map
+  EXT_OSC       =  0
+  GPS_PPS       =  1
+  GPS_RX_FROM   =  2
+  GPS_TX_TO     =  3
+  SPARE         =  4 ' use spare pin as test point
+  ADC_DRDYOUT   =  5
+  ADC_MISO      =  6 ' connected to DOUT on MAX11040K
+  ADC_MOSI      =  7 ' connected to DIN  on MAX11040K
+  ADC_SCLK      =  8
+  ADC_CS        =  9
+  SRAM_CS       = 10
+  SRAM_MOSI     = 11
+  SRAM_MISO     = 12
+  SRAM_CLK      = 13
+  WAKEUP        = 14
+  REED_SWITCH   = 15
 
+  SLAVE_CLK     = 16 
+  SLAVE_SIMO    = 17 
+  SLAVE_SOMI    = 18 
+  SLAVE_CS      = 19 
+  SLAVE_IRQ     = 20 
+
+  SHARED_CLK    = 21
+  SHARED_MOSI   = 22
+  SHARED_MISO   = 23
+  OLED_CS       = 24
+  DAC_CS        = 25
+  RADIO_CS      = 26
+  ONE_WIRE      = 27  
+
+  SCL           = 28
+  SDA           = 29
+  
+  DEBUG_TX_TO   = 30
+  DEBUG_RX_FROM = 31
+  
+
+
+  
+CON ' GPS constants including bit on I2C expander
+  PERIOD_LENGTH     = 16  ' number of seconds over which to collect oscillator data
   BYTES_IN_GPS_BUFFER = 1024
   GPSDO_REF         = 20_000_000  
 
@@ -57,23 +93,13 @@ CON ' Uart command constants
   #0, WAITING_FOR_START, WAITING_FOR_END, PROCESS_BUFFER
   
 CON ' ON/OFF switch constants
-  REED_SWITCH       = 15
   BUTTON_PRESS_TIME = CLK_FREQ
   BUTTON_HOLD_TIME  = CLK_FREQ*5
   NOT_PRESSED       = 1         ' Reed switch is pulled high normally 
   PRESSED           = 0         ' Pressed is actually logic 0  
 
-  WAKEUP            = 14
-  RADIO_CS          = 26
-  
 CON ' ADC constants
   
-  ADC_DRDYOUT =  5
-  ADC_MISO    =  6 ' connected to DOUT on MAX11040K
-  ADC_MOSI    =  7 ' connected to DIN  on MAX11040K
-  ADC_SCLK    =  8
-  ADC_CS      =  9
-
   
   WSCIR   = %0100_0000  ' Write Sampling Instant Control Register
   RSICR   = %1100_0000  ' Read Sampling Instant Control Register
@@ -104,16 +130,6 @@ CON ' constants for spi buffers
   LONGS_IN_SLAVE_BUFFER   = BYTES_IN_SLAVE_BUFFER >> 2
 
 
-  SLAVE_CLK           = 16 
-  SLAVE_SIMO          = 17 
-  SLAVE_SOMI          = 18 
-  SLAVE_CS            = 19 
-  SLAVE_IRQ           = 20 
-  
-
-  SLAVE_TEST          = 4 ' use spare pin as test point
-'  MASTER_TEST         = 14
-'  ADC_TEST
   #0, SLAVE_BUF_EMPTY, SLAVE_BUF_EMPTYING, SLAVE_BUF_FULL
   
 CON ' ADC buffer constants
@@ -166,8 +182,6 @@ CON ' UART ports and pin numbers - DEBUG, GPS, MSP
   CLEAR             =     16  ''CS: Clear Screen      
   HOME              =      1  ''HM: HoMe cursor       
   
-  DEBUG_RX_FROM     = 31
-  DEBUG_TX_TO       = 30
 
 CON ' gps buffer filled state
   MY_TRUE  = 1
@@ -192,9 +206,8 @@ CON ' Reed Switch constants
   REBOOT_TIMEOUT_MS    =    5_000       ' number of ms the button must be pressed ONCE in PROGRAMMING state to force a software reboot
   SLEEP_PRESS_MS       =    2_000       ' number of ms the button must be pressed to put the unit to sleep when it is in continuous mode
   CONTINUOUS_PRESS_MS  =    5_000       ' number of ms the button must be pressed to put the unit in to continuous mode
-  MAG_ACC_TIMER_MS     =      500       ' number of ms between MAG/ACC readings
+  MAG_ACC_TIMER_MS     =      250       ' number of ms between MAG/ACC readings
   
-  WATCH_DOG_TIMEOUT_CNT =  WATCH_DOG_TIMEOUT_MS  * ONE_MS 
   PROGRAM_TIMEOUT_CNT   =  PROGRAM_TIMEOUT_MS    * ONE_MS
   REBOOT_TIMEOUT_CNT    =  REBOOT_TIMEOUT_MS     * ONE_MS
   SLEEP_PRESS_CNT       =  SLEEP_PRESS_MS        * ONE_MS
@@ -206,7 +219,7 @@ DAT ' oled messages
   awakeMsg   byte   "System Ready.   ", 0
   magnetMsg  byte   "Wake with Magnet", 0
   euiMsg     byte   "SN:             ", 0
-  versionMsg byte   "Version 2.2.pgb ", 0
+  versionMsg byte   "Version 2.1.pgb ", 0
 
 OBJ                                  
   UARTS     : "FullDuplexSerial4portPlus_0v3"       '1 COG for 3 serial ports
@@ -214,6 +227,7 @@ OBJ
   UBX       : "ubloxInterface2"
   PEBBLE    : "BasicPebbleFunctions"                ' I put these into a seperate file to make editing easier
   COGS      : "sparecogs"
+  CLOCK     : "Clock"                               ' object for chaning clock speeds
   
 VAR
   byte mainCogId, serialCogId, adcCogId, slaveCogId, watchDogCogId
@@ -230,6 +244,7 @@ VAR
   word rtcYear, rtcMonth, rtcDay, rtcDow, rtcHour, rtcMinute, rtcSecond
   word year, month, day, hour, minute, second, utcValid, gpsValid, fixStat
           
+  long packetIdx ' fixme get rid of this later
   long pressTime, releaseTime, led1on, onTime
   long menuPressTime ' time when the menu button was pressed - use for timeout'
   long magAccTimer
@@ -260,11 +275,19 @@ PUB MAIN | bPressed, previousState, lastRTCcheck
     
   mainCogId     := cogid
   serialCogId   := -1
+  packetIdx     := 0
+  CLOCK.INIT(6_250_000)                                   'Initialize Clock object
+
   START_WATCHDOG
+
   PEBBLE.I2C_INIT               ' set up the I2C pin definitions only once
 
-  DIRA[WAKEUP]  := 1
-  OUTA[WAKEUP]  := 0
+  DIRA[SPARE]    := 1
+  OUTA[SPARE]    := 1            ' this pin should be kept high to reduce power draw
+  DIRA[ONE_WIRE] := 1
+  OUTA[ONE_WIRE] := 1            ' this pin should be kept high to reduce power draw
+  DIRA[WAKEUP]   := 1
+  OUTA[WAKEUP]   := 0
 
   mainState := TURNING_ON       ' mainState is NOT stored in SRAM
   acqMode   := BOOT             ' this indicates first boot
@@ -275,15 +298,20 @@ PUB MAIN | bPressed, previousState, lastRTCcheck
 
     case mainState
       OFF  :                    ' mainState can only be OFF if the acqMode is SLEEP or we are sleeping between triggers
+        PAUSE_MS(1)             ' if we are off we can afford to sleep a little bit
         case acqMode
           SLEEP : 
-            if bPressed                      'wake up from sleep and enter continuous mode
+            if bPressed                      ' wake up from sleep and enter continuous mode
               mainState     := TURNING_ON
               acqMode       := TRIG
 
-          TRIG  :                            'wake up from sleep because trigger time arrived
+          TRIG  :                            ' wake up from sleep because trigger time arrived
             if (CNT - lastRTCcheck) > clkfreq                      ' avoid checking the RTC too often
               READ_RTC
+              'DIRA[SDA] := 1                 ' here we are pulling things high  
+              'DIRA[SCL] := 1                 ' to try to lower current lose
+              'OUTA[SDA] := 1                 ' through pull-up resistors.  
+              'OUTA[SCL] := 1
               lastRTCcheck := CNT
               if (rtcMinute//interval)==(interval - 1) AND (rtcSecond > 40)
                 mainState  := TURNING_ON
@@ -359,9 +387,10 @@ PUB WAKE_SYSTEM(newAcqMode) | displayTime
   adcCogId      := -1
   slaveCogId    := -1
 
-  'STOP_WATCHDOG     ' stop watchdog before changing clock speed
-  'PEBBLE._rc_to_fast_prop
-  'START_WATCHDOG    ' we need to start the watch dog with the new clockspeed
+  if clkfreq <> CLK_FREQ
+    STOP_WATCHDOG           ' stop watchdog before changing clock speed
+    CLOCK.SetMode(CLOCK#XTAL1_PLL16x)
+    START_WATCHDOG          ' we need to start the watch dog with the new clockspeed
 
   PEBBLE.GUMSTIX_ON             ' sak preferes to have gumstix on right away
   PEBBLE.OLED_ON                ' turn on and init oled
@@ -435,6 +464,12 @@ PUB WAKE_SYSTEM(newAcqMode) | displayTime
   UARTS.STR(DEBUG, string(13, "$PSMSG, watchDogCogId: "))
   UARTS.DEC(DEBUG, watchDogCogId)
 
+  UARTS.STR(DEBUG, string(13, "$PSMSG, timeOutCnts: "))
+  UARTS.DEC(DEBUG,  clkfreq/1000 * WATCH_DOG_TIMEOUT_MS)
+
+  UARTS.STR(DEBUG, string(13, "$PSMSG, CLK_FREQ: "))
+  UARTS.DEC(DEBUG,  CLK_FREQ)
+
 
   PAUSE_MS(200)
   PEBBLE.OLED_WRITE_LINE1(@awakeMsg)
@@ -471,11 +506,18 @@ PUB TURN_SYSTEM_OFF | i
   lockret(gpsSem)                               '
 
   PEBBLE.SET_EXPANDER_TO_LOW_POWER
+  'DIRA[SDA] := 1                 ' here we are pulling things high  
+  'DIRA[SCL] := 1                 ' to try to lower current lose
+  'OUTA[SDA] := 1                 ' through pull-up resistors.  
+  'OUTA[SCL] := 1
+
   PAUSE_MS(200)
   
-  'STOP_WATCHDOG     ' stop watchdog before changing clock speed
-  'PEBBLE._rcslow_prop
-  'START_WATCHDOG    ' we need to start the watch dog with the new clockspeed
+  STOP_WATCHDOG           ' stop watchdog before changing clock speed
+  'CLOCK.SetMode(CLOCK#RCSLOW_)
+  CLOCK.SetMode(CLOCK#RCFAST_)
+'''CLOCK.SetMode(CLOCK#XTAL1_)
+  START_WATCHDOG          ' we need to start the watch dog with the new clockspeed
 
 PUB MENU_SYSTEM(bPressed)
 ' method that displays and handles the menu system
@@ -564,7 +606,28 @@ PUB FREE_COGS | idx, response
 PUB START_WATCHDOG
 '' method that starts a new watchdog timer in unique cog
 ' first stop any existing watchdog cogs then start the watchdog
-  watchDogCogId := cognew(WATCHDOG, @watchDogStack)
+  watchDogCogId := cognew(WATCHDOG(clkfreq/1000 * WATCH_DOG_TIMEOUT_MS), @watchDogStack)
+
+PUB WATCHDOG(timeOutCnts) | timeSincePet, programMode, i
+'' Watchdog function.  Should be started in its own cog.
+'' input should be the number of system counts that can pass before system reboots.  
+'' This watchdog does 1 thing it watches a shared memory location (single LONG in HUB).  If that location
+''     isn't updated evert WATCH_DOG_TIMEOUT_CNT this cog will reboot the prop.
+
+  'dira[RADIO_CS] := 1
+  'outa[RADIO_CS] := 0
+
+  watchDogTimer := CNT          ' init time so we don't reboot right away
+
+  repeat
+    '!outa[RADIO_CS]
+    PAUSE_MS(10)                ' spend some time sleeping but not too much
+
+    if (CNT - watchDogTimer) > timeOutCnts   ' how long since last pet?
+      REBOOT
+
+PUB PET_WATCHDOG
+  watchDogTimer := CNT   ' pet the watchdog                       
 
 PUB STOP_WATCHDOG
 ' if watchdog is already running kill it; indicate this by setting id to -1
@@ -573,6 +636,8 @@ PUB STOP_WATCHDOG
 
   cogstop(watchDogCogId)
   watchDogCogId := -1
+  dira[RADIO_CS] := 0
+
       
 PUB BUTTON_PRESSED  : buttonPressed 
 ' method that checks to see the button has been pressed.
@@ -610,25 +675,6 @@ PUB BUTTON_PRESSED  : buttonPressed
       if CNT-onTime > clkfreq<<1
         buttonState := WAITING_FOR_PRESS
     
-
-PUB WATCHDOG | timeSincePet, programMode, i
-'' Watchdog function.  Should be started in its own cog.
-'' This watchdog does 1 thing it watches a shared memory location (single LONG in HUB).  If that location
-''     isn't updated evert WATCH_DOG_TIMEOUT_CNT this cog will reboot the prop.
-
-  watchDogTimer := CNT          ' init time so we don't reboot right away
-
-  repeat
-    PAUSE_MS(10)                ' spend some time sleeping but not too much
-
-    ' Check for watchdog timeout
-'    if (CNT - watchDogTimer) > WATCH_DOG_TIMEOUT_CNT 
-    if (CNT - watchDogTimer) > (clkfreq/1000 * WATCH_DOG_TIMEOUT_MS) 
-      REBOOT
-
-
-PUB PET_WATCHDOG
-  watchDogTimer := CNT   ' pet the watchdog                       
 
 PUB START_ACQUISITION  
 ' after waking from sleep we need to start up a number of different things.
@@ -684,7 +730,7 @@ PUB GET_AND_PRINT_PARAMETERS
 PUB DO_SOMETHING_USEFUL | rxByte, response, idx
 ' put things here that need to be done but have some timing flexibility
 ' all of this happens in the top level cog
-
+  outa[wakeup] := 1
   ' here we collect bytes from uart and process them.
   ' this should follow the same setup as the ublox I think
    rxByte := uarts.rxcheck(DEBUG)       ' collect byte from DEBUG port
@@ -763,7 +809,6 @@ PUB DO_SOMETHING_USEFUL | rxByte, response, idx
 
   ' if it's time for a MAG/ACC measurement, go get it
   if (CNT - magAccTimer) > MAG_ACC_TIMER_CNT
-    outa[wakeup]  := 1          ' indicate we entered MAG/ACC stuff
     magAccTimer := CNT
     auxBuffer1[auxIdx++] := PEBBLE.GET_ACC_X
     auxBuffer1[auxIdx++] := PEBBLE.GET_ACC_Y
@@ -773,7 +818,6 @@ PUB DO_SOMETHING_USEFUL | rxByte, response, idx
     auxBuffer1[auxIdx++] := PEBBLE.GET_MAG_Y
     auxBuffer1[auxIdx++] := PEBBLE.GET_MAG_Z
     auxBuffer1[auxIdx++] := PEBBLE.READ_MAG_TEMP
-    outa[wakeup]  := 0
     
 
   ' here we process all bytes sitting in the gps buffer -
@@ -820,6 +864,8 @@ PUB DO_SOMETHING_USEFUL | rxByte, response, idx
     UBX.CLEAR_UBX_BUFFER                                ' clear the pointer on that side so it can process next second
     gpsDataToWrite := MY_TRUE                           ' let the other cogs know there are gps data to write
 
+  outa[wakeup] := 0
+  
 PUB SEND_AUX_PACKET | idx, wakeUpMode, recTypeEnum, timeOfDayOn, timeOfDaySleep, radioOnDuration, rtcYMD, rtcHMS
 ' copy the aux data from aux1 to aux2
 ' signal the SPI cog that we've got aux data to send
@@ -858,7 +904,8 @@ PUB SEND_AUX_PACKET | idx, wakeUpMode, recTypeEnum, timeOfDayOn, timeOfDaySleep,
   auxBuffer2[6] := 0 ' reserved
   auxBuffer2[7] := 0 ' reserved
 
-  auxIdx        := 8 ' our first data should go here
+  auxBuffer2[8] := packetIdx++
+  auxIdx        := 9 ' our first data should go here
 
   longfill(@auxBuffer1 , 0 , 128)
   auxDataToWrite := MY_TRUE
@@ -1020,12 +1067,12 @@ PUB PRINT_TIME_AND_DATE
     uarts.STR(DEBUG, string("GPS_INVALID"))
   uarts.putc(debug, ",")
 
-  uarts.dec(debug, UBX.get_longitude)
-  uarts.putc(debug, ",")
-  uarts.dec(debug, UBX.get_latitude)
-  uarts.putc(debug, ",")
-  uarts.dec(debug, UBX.get_elevation)
-  uarts.putc(debug, ",")
+  'uarts.dec(debug, UBX.get_longitude)
+  'uarts.putc(debug, ",")
+  'uarts.dec(debug, UBX.get_latitude)
+  'uarts.putc(debug, ",")
+  'uarts.dec(debug, UBX.get_elevation)
+  'uarts.putc(debug, ",")
   uarts.bin(debug, utcValid, 3)   ' taken from NAV-TIMEUTC  
   uarts.putc(debug, ",")
   if ((utcValid>>2 & %1) == %1)

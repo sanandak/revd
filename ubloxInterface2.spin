@@ -26,24 +26,6 @@ CON
   INPUT             =  0
   OUTPUT            =  1
 
-CON ' I2C expander
-  I2C_SDA = 29                  ' I2C bus data
-  I2C_SCL = 28                  ' I2C bus clock
-
-  PCF8574 = %0111_000_0         ' I2C expander address as per the datasheet bits 3-1 are set by layout
-  EXPANDER_ADDRESS = %111       ' the address for the I2C expander as per our design
-  WRITE_BIT = 0                   ' for write operation R/W bit should be LOW
-  READ_BIT  = 1                   ' for read operation R/W bit should be HIGH
-
-  #0, ACK, NAK
-
-CON ' GPS constants including bit on I2C expander
-  GPS_RESET         = 4         ' this bit is set/reserved on the I2C expander
-
-  GPS_RX_FROM       = 2
-  GPS_TX_TO         = 3
-  GPS_PPS           = 1
-
 CON ' Constants for processing the ublox data
   ' state machine
   #0, WAIT_FOR_HEADER1, WAIT_FOR_HEADER2, WAIT_FOR_CLASS, WAIT_FOR_MSGID, WAIT_FOR_LEN0, WAIT_FOR_LEN1, READ_PAYLOAD, READ_CKSUM0, READ_CKSUM1, DONE
@@ -60,8 +42,6 @@ CON ' Constants for processing the ublox data
   NAK_LEN     = 2
   MONVER_LEN  = 70
 
-CON
-  TEST_PT     = 27
 
 CON  '' Serial port pins and baud settings
   TAB               = 09
