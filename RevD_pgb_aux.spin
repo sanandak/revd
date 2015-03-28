@@ -219,7 +219,7 @@ DAT ' oled messages
   awakeMsg   byte   "System Ready.   ", 0
   magnetMsg  byte   "Wake with Magnet", 0
   euiMsg     byte   "SN:             ", 0
-  versionMsg byte   "Version 2.1.pgb ", 0
+  versionMsg byte   "Version 3.0.0   ", 0
 
 OBJ                                  
   UARTS     : "FullDuplexSerial4portPlus_0v3"       '1 COG for 3 serial ports
@@ -810,15 +810,14 @@ PUB DO_SOMETHING_USEFUL | rxByte, response, idx
   ' if it's time for a MAG/ACC measurement, go get it
   if (CNT - magAccTimer) > MAG_ACC_TIMER_CNT
     magAccTimer := CNT
-    auxBuffer1[auxIdx++] := PEBBLE.GET_ACC_X
-    auxBuffer1[auxIdx++] := PEBBLE.GET_ACC_Y
-    auxBuffer1[auxIdx++] := PEBBLE.GET_ACC_Z
+    auxBuffer1[auxIdx++ <# 127] := PEBBLE.GET_ACC_X
+    auxBuffer1[auxIdx++ <# 127] := PEBBLE.GET_ACC_Y
+    auxBuffer1[auxIdx++ <# 127] := PEBBLE.GET_ACC_Z
     PEBBLE.READ_MAG             ' we need to read the mag before the others are populated.  
-    auxBuffer1[auxIdx++] := PEBBLE.GET_MAG_X
-    auxBuffer1[auxIdx++] := PEBBLE.GET_MAG_Y
-    auxBuffer1[auxIdx++] := PEBBLE.GET_MAG_Z
-    auxBuffer1[auxIdx++] := PEBBLE.READ_MAG_TEMP
-    
+    auxBuffer1[auxIdx++ <# 127] := PEBBLE.GET_MAG_X
+    auxBuffer1[auxIdx++ <# 127] := PEBBLE.GET_MAG_Y
+    auxBuffer1[auxIdx++ <# 127] := PEBBLE.GET_MAG_Z
+    auxBuffer1[auxIdx++ <# 127] := PEBBLE.READ_MAG_TEMP
 
   ' here we process all bytes sitting in the gps buffer -
   ' and we stay in this repeat until the uart buffer is empty OR we've reached the end of the packet
@@ -870,9 +869,10 @@ PUB SEND_AUX_PACKET | idx, wakeUpMode, recTypeEnum, timeOfDayOn, timeOfDaySleep,
 ' copy the aux data from aux1 to aux2
 ' signal the SPI cog that we've got aux data to send
 ' wipe out the buffer so it's ready for next time
-
-  repeat until auxDataToWrite == MY_FALSE ' wait here until previous packet has been sent
   
+  if auxDataToWrite == MY_TRUE  ' haven't emptied old buffer - return.
+    return
+
   longmove(@auxBuffer2 , @auxBuffer1 , 128)
   idx := 0
 
