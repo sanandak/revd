@@ -182,10 +182,10 @@ CON ' LSM register constants
 
   LSM303_OUT_X_H_M         = $03
   LSM303_OUT_X_L_M         = $04
-  LSM303_OUT_Y_H_M         = $05 
-  LSM303_OUT_Y_L_M         = $06
-  LSM303_OUT_Z_H_M         = $07
-  LSM303_OUT_Z_L_M         = $08
+  LSM303_OUT_Z_H_M         = $05 
+  LSM303_OUT_Z_L_M         = $06
+  LSM303_OUT_Y_H_M         = $07
+  LSM303_OUT_Y_L_M         = $08
 
 '  LSM303_SR_REG_M          = $09
 '  LSM303_IRA_REG_M         = $0A
@@ -1066,13 +1066,13 @@ PUB GET_MAG_X : magX
   magX := mag[0] << 24 | mag[1] << 16
   magX ~>= 16 
   
-PUB GET_MAG_Y : magY
-  magY := mag[2] << 24 | mag[3] << 16
-  magY ~>= 16 
-
 PUB GET_MAG_Z : magZ
-  magZ := mag[4] << 24 | mag[5] << 16
+  magZ := mag[2] << 24 | mag[3] << 16
   magZ ~>= 16 
+
+PUB GET_MAG_Y : magY
+  magY := mag[4] << 24 | mag[5] << 16
+  magY ~>= 16 
 
 PUB READ_MAG_TEMP : magTemp 
 ' temperature is 12 bits in the top bits of a 16 bit h,l word
