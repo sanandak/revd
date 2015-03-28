@@ -863,7 +863,7 @@ PUB SEND_AUX_PACKET | idx, wakeUpMode, recTypeEnum, timeOfDayOn, timeOfDaySleep,
   longfill(@auxBuffer1 , 0 , 128)
   auxDataToWrite := MY_TRUE
     
-PUB UPDATE_TIME_AND_DATE | isLeapYear
+PUB UPDATE_TIME_AND_DATE | isLeapYear, rtcYMD, rtcHMS
 '' get the RTC AND GPS time
 
   READ_RTC
@@ -913,7 +913,15 @@ PUB UPDATE_TIME_AND_DATE | isLeapYear
     UARTS.STR(DEBUG,string(13,"Waiting for gpsSem."))
     PAUSE_MS(10)
   ymd         := year * 10_000 + month * 100 + day
-  hms         := hour * 10_000 + minute * 100 + second 
+  hms         := hour * 10_000 + minute * 100 + second
+
+  ' sak added 4/28/15 - for testing in non-gps situations'
+  if fixStat == 0
+    rtcYMD         := rtcYear * 10_000 + rtcMonth * 100 + rtcDay
+    rtcHMS         := rtcHour * 10_000 + rtcMinute * 100 + rtcSecond
+    ymd := rtcYMD
+    hms := rtcHMS
+
   cntsAtPPS1  := cntsTemp
   validStatus := fixStat & $FF   ' make sure this only occupies one byte
   lockclr(gpsSem)
