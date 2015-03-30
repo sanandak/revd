@@ -16,7 +16,7 @@
 '**************************************************************
 CON ' Clock mode settings
   _CLKMODE = XTAL1 + PLL16X
-  _XINFREQ = 6_250_000
+  _XINFREQ = 5_000_000
 
   CLK_FREQ = ((_clkmode - xtal1) >> 6) * _xinfreq               ' system freq as a constant
   ONE_MS   = CLK_FREQ / 1_000                                   ' ticks in 1ms
@@ -278,17 +278,24 @@ PUB MAIN | bPressed, previousState, lastRTCcheck
     
   mainCogId     := cogid
   serialCogId   := -1
-  CLOCK.INIT(6_250_000)         ' Initialize Clock object
+  CLOCK.INIT(5_000_000)         ' Initialize Clock object
 
   START_WATCHDOG
+  CLOCK.SetMode(CLOCK#RCSLOW_)
+  'CLOCK.SetMode(CLOCK#RCFAST_)
+'  CLOCK.SetMode(CLOCK#XTAL1_)
+
+  repeat
+    PET_WATCHDOG                ' do this every time through the loop.
+    pause_ms(10)
 
   PEBBLE.I2C_INIT               ' set up the I2C pin definitions only once
 
   DIRA[WAKEUP]  := 1
   OUTA[WAKEUP]  := 0
 
-  mainState := TURNING_ON       ' mainState is NOT stored in SRAM
-  acqMode   := BOOT             ' this indicates first boot
+  mainState := TURNING_OFF              ' mainState is NOT stored in SRAM
+  acqMode   := TRIG             ' this indicates first boot
 
   repeat
     PET_WATCHDOG                ' do this every time through the loop.
