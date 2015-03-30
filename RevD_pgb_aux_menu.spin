@@ -79,6 +79,7 @@ CON ' Uart command constants
     HARD_REBOOT_GUMSTIX   = "H"
     PUT_SYSTEM_TO_SLEEP   = "L"
     RATE                  = "R"
+    SHORT                 = "T"
     TRIG_INTERVAL         = "I"
     QUERY                 = "Q"
     GAIN                  = "G"
@@ -219,7 +220,7 @@ DAT ' oled messages
   awakeMsg   byte   "System Ready.   ", 0
   magnetMsg  byte   "Wake with Magnet", 0
   euiMsg     byte   "SN:             ", 0
-  versionMsg byte   "Version 2.2.pgb ", 0
+  versionMsg byte   "Version 2.1.pgb ", 0
 
 OBJ                                  
   UARTS     : "FullDuplexSerial4portPlus_0v3"       '1 COG for 3 serial ports
@@ -240,10 +241,12 @@ VAR
   byte oLedBuf[20] ' set aside some room for the oled 
   byte sramParms[64]
 
+  word magAccSampleCnt
   word dacValue, dacNew, dacOld
   word rtcYear, rtcMonth, rtcDay, rtcDow, rtcHour, rtcMinute, rtcSecond
   word year, month, day, hour, minute, second, utcValid, gpsValid, fixStat
           
+  long rtcYMD, rtcHMS
   long pressTime, releaseTime, led1on, onTime
   long menuPressTime ' time when the menu button was pressed - use for timeout'
   long magAccTimer, displayDark
@@ -292,7 +295,6 @@ PUB MAIN | bPressed, previousState, lastRTCcheck
 
     case mainState
       OFF  :                    ' mainState can only be OFF if the acqMode is SLEEP or we are sleeping between triggers
-        PAUSE_MS(1)             ' if we are off we can afford to pause a bit to save power
         case acqMode
           SLEEP : 
             if bPressed                      'wake up from sleep and enter continuous mode
@@ -300,6 +302,9 @@ PUB MAIN | bPressed, previousState, lastRTCcheck
               acqMode       := TRIG
 
           TRIG  :                            'wake up from sleep because trigger time arrived
+            OUTA[WAKEUP]  := 1
+            OUTA[WAKEUP]  := 0
+            'PAUSE_MS(1)             ' if we are off we can afford to pause a bit to save power
             if (CNT - lastRTCcheck) > clkfreq                      ' avoid checking the RTC too often
               PEBBLE.LED2_ON
               READ_RTC
@@ -374,7 +379,7 @@ PUB WAKE_SYSTEM(newAcqMode) | displayTime
 
   LAUNCH_SERIAL_COG             ' handle the 2 serial ports- debug and GPS
   PAUSE_MS(1_000)
-  UARTS.STR(DEBUG, string(13, "$PSMSG, Waking system: "))
+  UARTS.STR(DEBUG, string(13,13,13, "$PSMSG, Waking system: "))
   READ_RTC
   PRINT_RTC_TIME
   PET_WATCHDOG
@@ -482,9 +487,9 @@ PUB TURN_SYSTEM_OFF | i
   PAUSE_MS(200)
   
   STOP_WATCHDOG           ' stop watchdog before changing clock speed
-  'CLOCK.SetMode(CLOCK#RCSLOW_)
+  CLOCK.SetMode(CLOCK#RCSLOW_)
   'CLOCK.SetMode(CLOCK#RCFAST_)
-  CLOCK.SetMode(CLOCK#XTAL1_)
+  'CLOCK.SetMode(CLOCK#XTAL1_)
   START_WATCHDOG          ' we need to start the watch dog with the new clockspeed
 
 PUB MENU_SYSTEM(bPressed)
@@ -567,17 +572,6 @@ PUB MENU_SYSTEM(bPressed)
           menuPressTime := cnt
 
 
-
-PUB FREE_COGS | idx, response
-  response := cogs.freestring
-  repeat idx from 0 to 7
-    if byte[response][idx] => "0" AND byte[response][idx] =< "7"
-'      OUTA[WAKEUP] := 1
-    PAUSE_MS(5)
-'    OUTA[WAKEUP] := 0
-    PAUSE_MS(5)
-
-'  OUTA[WAKEUP] := 1
 
 PUB BUTTON_PRESSED  : buttonPressed 
 ' method that checks to see the button has been pressed.
@@ -741,7 +735,7 @@ PUB DO_SOMETHING_USEFUL | rxByte, response, idx
     %01 : ' rising edge -> grab phsb
       cntsTemp := CNT - PHSB
       UPDATE_TIME_AND_DATE                   ' KEEP IN MIND WE ALWAYS UPDATE TIME/DATE ON THE PPS following OUR MESSAGE SO WE ARE BEHIND ONE SECOND
-      SEND_AUX_PACKET
+      PRINT_TIME_AND_DATE
       case menuState
         MENU_NONE        :
           PRINT_TIME_AND_DATE
@@ -778,8 +772,8 @@ PUB DO_SOMETHING_USEFUL | rxByte, response, idx
 
   ' if it's time for a MAG/ACC measurement, go get it
   if (CNT - magAccTimer) > MAG_ACC_TIMER_CNT
-    outa[wakeup]  := 1          ' indicate we entered MAG/ACC stuff
     magAccTimer := CNT
+    magAccSampleCnt++
     auxBuffer1[auxIdx++] := PEBBLE.GET_ACC_X
     auxBuffer1[auxIdx++] := PEBBLE.GET_ACC_Y
     auxBuffer1[auxIdx++] := PEBBLE.GET_ACC_Z
@@ -788,7 +782,10 @@ PUB DO_SOMETHING_USEFUL | rxByte, response, idx
     auxBuffer1[auxIdx++] := PEBBLE.GET_MAG_Y
     auxBuffer1[auxIdx++] := PEBBLE.GET_MAG_Z
     auxBuffer1[auxIdx++] := PEBBLE.READ_MAG_TEMP
-    outa[wakeup]  := 0
+    if magAccSampleCnt == 15
+      outa[wakeup]  := 1
+      SEND_AUX_PACKET
+      outa[wakeup]  := 0
     
 
   ' here we process all bytes sitting in the gps buffer -
@@ -809,47 +806,33 @@ PUB DO_SOMETHING_USEFUL | rxByte, response, idx
       
     if gpsDataToWrite == MY_FALSE                      ' have the data we put there previously been written?
       bytemove(@gpsBuffer, ubxBufferAddress, 1024)     ' copy that info into gpsBuffer
-      'longfill(@gpsBuffer,      $FFFF_FFFF,      256)
-      'longmove(@gpsBuffer, @tempBuf, 256)
       longmove(@gpsBuffer[129], @gpsBuffer[127], 127)  ' move data over so we can insert header
       longmove(@gpsBuffer[1],   @gpsBuffer[0],   127)  ' move data over so we can insert header
       gpsBuffer[0]   := "P" << 24 | "G" << 16 | VERSION << 8 | validStatus
       gpsBuffer[128] := "P" << 24 | "G" << 16 | VERSION << 8 | validStatus
-{      uarts.str(debug, string(13,"     00 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31"))
-      uarts.str(debug, string(13,"----------------------------------------------------------------------------------------------------"))
-
-      idx := 0
-      repeat 1024
-        if idx//32 == 0
-          UARTS.PUTC(DEBUG, 13)
-          UARTS.DEC(DEBUG, idx)
-          UARTS.PUTC(DEBUG, TAB)
-        'if idx == 512
-        '  UARTS.PUTC(DEBUG, 13)
-        UARTS.HEX(DEBUG, BYTE[@gpsBuffer][idx++],2)
-        'UARTS.HEX(DEBUG, BYTE[ubxBufferAddress][idx++],2)
-        UARTS.PUTC(DEBUG, SPACE)
-}        
 
     ' buffer has new data so clear old buffer and declare buffer should be written
     UBX.CLEAR_UBX_BUFFER                                ' clear the pointer on that side so it can process next second
     gpsDataToWrite := MY_TRUE                           ' let the other cogs know there are gps data to write
 
-PUB SEND_AUX_PACKET | idx, wakeUpMode, recTypeEnum, timeOfDayOn, timeOfDaySleep, radioOnDuration, rtcYMD, rtcHMS
+PUB SEND_AUX_PACKET | idx, wakeUpMode, recTypeEnum, timeOfDayOn, timeOfDaySleep, radioOnDuration
 ' copy the aux data from aux1 to aux2
 ' signal the SPI cog that we've got aux data to send
 ' wipe out the buffer so it's ready for next time
 
-  repeat until auxDataToWrite == MY_FALSE ' wait here until previous packet has been sent
+  if auxDataToWrite == MY_TRUE  ' haven't emptied old buffer - return.
+    return
   
   longmove(@auxBuffer2 , @auxBuffer1 , 128)
-  idx := 0
+  idx := 0                      ' start using this as a BYTE-pointer
 
+  ' long ZERO
   auxBuffer2.byte[idx++] := validStatus
   auxBuffer2.byte[idx++] := VERSION
   auxBuffer2.byte[idx++] := "A"
   auxBuffer2.byte[idx++] := "P"
 
+  ' long ONE
   auxBuffer2.byte[idx++] := 0 'reserved
   auxBuffer2.byte[idx++] := interval
   auxBuffer2.byte[idx++] := recordLength
@@ -861,19 +844,24 @@ PUB SEND_AUX_PACKET | idx, wakeUpMode, recTypeEnum, timeOfDayOn, timeOfDaySleep,
     4 : auxBuffer2.byte[idx++] := 4 ' radio
     OTHER : auxBuffer2.byte[idx++] := 0
      
-
+  ' long TWO
   auxBuffer2.byte[idx++] := radioOnDuration
   auxBuffer2.byte[idx++] := timeOfDaySleep
   auxBuffer2.byte[idx++] := timeOfDayOn
   auxBuffer2.byte[idx++] := wakeUpMode
 
-  auxBuffer2[3] := dacValue
-  auxBuffer2[4] := rtcYMD
-  auxBuffer2[5] := rtcHMS
-  auxBuffer2[6] := 0 ' reserved
-  auxBuffer2[7] := 0 ' reserved
+  ' long THREE
+  idx := 3                     ' now switch to using it as a LONG-pointer
+  auxBuffer2[idx++] := dacValue
+  auxBuffer2[idx++] := rtcYear * 10000 + rtcMonth  * 100 + rtcDay
+  auxBuffer2[idx++] := rtcHour * 10000 + rtcMinute * 100 + rtcSecond
+  auxBuffer2[idx++] := MAG_ACC_TIMER_MS ' reserved
+  auxBuffer2[idx++] := 0 ' reserved
 
-  auxIdx        := 8 ' our first data should go here
+  auxBuffer2[idx++] := magAccSampleCnt ' number of samples in this buffer
+  magAccSampleCnt   := 0
+
+  auxIdx        := idx ' the first LONG of data should go here
 
   longfill(@auxBuffer1 , 0 , 128)
   auxDataToWrite := MY_TRUE
@@ -929,6 +917,14 @@ PUB UPDATE_TIME_AND_DATE | isLeapYear
     PAUSE_MS(10)
   ymd         := year * 10_000 + month * 100 + day
   hms         := hour * 10_000 + minute * 100 + second 
+
+  ' sak added 4/28/15 - for testing in non-gps situations'
+  if fixStat == 0
+    rtcYMD         := rtcYear * 10_000 + rtcMonth  * 100 + rtcDay
+    rtcHMS         := rtcHour * 10_000 + rtcMinute * 100 + rtcSecond
+    ymd := rtcYMD
+    hms := rtcHMS
+
   cntsAtPPS1  := cntsTemp
   validStatus := fixStat & $FF   ' make sure this only occupies one byte
   lockclr(gpsSem)
@@ -1117,6 +1113,7 @@ PUB PROCESS_UART | idx, pkpA, pkpB, pkpC, cursor
     HARD_REBOOT_GUMSTIX   = "H"
     PUT_SYSTEM_TO_SLEEP   = "L"
     RATE                  = "R"
+    SHORT                 = "T"
     TIRG_INTERVAL         = "I"
     QUERY                 = "Q"
     GAIN                  = "G"
@@ -1215,6 +1212,14 @@ PUB PROCESS_UART | idx, pkpA, pkpB, pkpC, cursor
       cogStop(slaveCogId)
       STORE_PARAMETERS_TO_SRAM
       START_ACQUISITION
+
+    SHORT :                'T
+      UARTS.STR(DEBUG, string(" Shorting inputs on channel: "))
+      gainA := NUM.FROMSTR(@inUartBuf[inUartPtr[1]],NUM#DDEC) 
+      gainB := NUM.FROMSTR(@inUartBuf[inUartPtr[2]],NUM#DDEC) 
+      gainC := NUM.FROMSTR(@inUartBuf[inUartPtr[3]],NUM#DDEC) 
+      gainD := NUM.FROMSTR(@inUartBuf[inUartPtr[4]],NUM#DDEC) 
+      
       
     SOURCE :               'O                                     
       UARTS.STR(DEBUG, string(" Changing input source to: "))

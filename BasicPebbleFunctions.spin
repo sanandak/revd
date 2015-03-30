@@ -1195,6 +1195,8 @@ PUB SET_GAIN(_gain, ch) | gain, response, gainRegister
 '' method that sets the gain.  Gain is set for channel ch
 
   case _gain
+     0       : response := %0010_0000                   ' short inputs
+               gain     :=     0                        ' indicate channel is shorted
      1..5    : response := %0000
                gain     :=     1
      6..15   : response := %0001
@@ -1223,13 +1225,14 @@ PUB GAIN_BINARY_VAL(gain) | response
 '' method that decodes the gain enum settings
 
   case gain
-     1..5    : response := %0000
-     6..15   : response := %0001
-     16..25  : response := %0010
-     26..35  : response := %0011
-     36..50  : response := %0100
-     51..70  : response := %0101
-     71..90  : response := %0111
+     0       : response := 0 'shorted inputs
+     1..5    : response := 1 '%0001
+     6..15   : response := 2 '%0010
+     16..25  : response := 3 '%0011
+     26..35  : response := 4 '%0100
+     36..50  : response := 5 '%0101
+     51..70  : response := 6 '%0110
+     71..90  : response := 7 '%0111
      other   : response := %0000
 
 
