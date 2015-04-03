@@ -374,7 +374,7 @@ PUB INIT : response
 PUB SET_EXPANDER_TO_LOW_POWER : response 
 ' put the 2 expanders (and the LEDs they contain) into a know and low-power state
 ' EXP_1 : PGA_D_CS | PGA_C_CS | PGA_B_CS | PGA_A_CS | MUX2SEL_3-4 | MUX2SEL_1-2 | MUX1SEL_3-4 | MUX1SEL_1-2
-  expVal1 := PGA_D_CS | PGA_C_CS | PGA_B_CS | PGA_A_CS | %0000
+  expVal1 := $00' TURN EVERYTHING OFF PGA_D_CS | PGA_C_CS | PGA_B_CS | PGA_A_CS | %0000
   EXPANDER_WRITE(EXPANDER_1, expVal1)
 
 ' EXP_2 : GPS_RESET | MAG_ACC_EN | OLED_EN | UBLOX_EN | GUMSTIX_EN | 5V_ENABLE | LED1003 | LED1002     
@@ -387,16 +387,13 @@ PUB SET_EXPANDER_TO_LOW_POWER : response
   ANALOG_OFF
 
 ' gumstix is off so pull set spare pin to input
-  DIRA[SPARE]       := 0
+  DIRA[SPARE]       := 1
+  OUTA[SPARE]       := 0        ' pull this low
 ' analog and ADC stuff is turned off; make sure those are set to inputs
-  DIRA[ADC_DRDYOUT] := 0
-  DIRA[ADC_MISO]    := 0    
-  DIRA[ADC_MOSI]    := 0    
-  DIRA[ADC_SCLK]    := 0    
-  DIRA[ADC_CS]      := 0    
+  SHUTDOWN_ADC
 ' SRAM is powered but not used; hold it in reset with CS high
-  DIRA[SRAM_CS]     := 1           ' hold SRAM in RESET
-  OUTA[SRAM_CS]     := 1           ' hold SRAM in RESET
+  DIRA[SRAM_CS]     := 1        ' hold SRAM in RESET
+  OUTA[SRAM_CS]     := 1        ' hold SRAM in RESET
   DIRA[SRAM_MOSI]   := 0
   DIRA[SRAM_MISO]   := 0
   DIRA[SRAM_CLK]    := 0
@@ -415,6 +412,17 @@ PUB SET_EXPANDER_TO_LOW_POWER : response
 ' DAC is still powered so make sure we hold this line high
   DIRA[DAC_CS]      := 1        ' set as out
   OUTA[DAC_CS]      := 1        ' hold line high
+' RADIO is still powered so make sure we hold this line high
+  DIRA[RADIO_CS]    := 1        ' set as out
+  OUTA[RADIO_CS]    := 1        ' hold line high
+' ONE_WIRE temp sensor is not being used at the moment so pull it up to avoid burning current through R1102
+  DIRA[ONE_WIRE]    := 1  
+  OUTA[ONE_WIRE]    := 1  
+' I2C lines should be pulled high in this cog
+  DIRA[SCL]         := 1
+  OUTA[SCL]         := 1
+  DIRA[SDA]         := 1
+  OUTA[SDA]         := 1
   
 
 PUB LEDS_ON
@@ -673,6 +681,51 @@ PUB EXPANDER_WRITE(deviceAddress, expanderValue)
   I2C.WRITE(expanderValue)
   I2C.STOP
   return MY_TRUE
+
+PRI SHUTDOWN_ADC | dataOut
+' ADC can be shutdown via software.  Clock shutdown command to ADC
+'          call    #LOWER_CS                             ' lower CS line
+'          mov     data,         #WCR                    ' put the address into outLong
+'          call    #WRITE_BYTE                           ' Send it
+'          
+'          mov     data,         #%0_1_0_0_0_0_00        ' reset to be written to control register     
+'          call    #WRITE_BYTE                           ' Send it
+'          call    #RAISE_CS                             ' raise CS line
+          
+  DIRA[ADC_DRDYOUT] := 0
+  DIRA[ADC_MISO]    := 0    
+  DIRA[ADC_MOSI]    := 1    
+  DIRA[ADC_SCLK]    := 1    
+  DIRA[ADC_CS]      := 1        ' this device is still powered so hold in reset    
+  OUTA[ADC_CS]      := 1        ' hold CS high for reset    
+
+  dataOut := %0110_0000  ' Write Configuration Register
+  dataOut ><= 8          ' reverse the order of these 8 bits
+  repeat 8
+    OUTA[ADC_SCLK] := 0                         ' drop clock
+    OUTA[ADC_MOSI] := (dataOut & %01)           ' place next bit on MOSI
+    dataOut >>= 1
+    OUTA[ADC_SCLK] := 1                         ' raise clock
+  OUTA[ADC_SCLK] := 0                         ' leave clock low on exit
+  OUTA[ADC_MOSI] := 0                         ' leave MOSI low on exit
+
+  dataOut := %1000_0000  ' set SHDN high to put device into shutdown
+  dataOut ><= 8          ' reverse the order of these 8 bits
+  repeat 8
+    OUTA[ADC_SCLK] := 0                         ' drop clock
+    OUTA[ADC_MOSI] := (dataOut & %01)           ' place next bit on MOSI
+    dataOut >>= 1
+    OUTA[ADC_SCLK] := 1                         ' raise clock
+  OUTA[ADC_SCLK] := 0                         ' leave clock low on exit
+  OUTA[ADC_MOSI] := 0                         ' leave MOSI low on exit
+
+  DIRA[ADC_DRDYOUT] := 0
+  DIRA[ADC_MISO]    := 0    
+  DIRA[ADC_MOSI]    := 0    
+  DIRA[ADC_SCLK]    := 0    
+  DIRA[ADC_CS]      := 1        ' this device is still powered so hold in reset    
+  OUTA[ADC_CS]      := 1        ' hold CS high for reset    
+
 
 PUB READ_EUI 
   I2C.START
