@@ -230,7 +230,7 @@ VAR
   byte mainCogId, serialCogId, adcCogId, slaveCogId, watchDogCogId
   byte mainState, acqMode, buttonState
   byte menuState, requestedState
-  byte oledOn, offSec, offMin, led1on, led2On
+  byte oledOn, onDuration, led1on, led2On
   byte lockType, recordComplete
   byte edgeDetector
   byte auxIdx
@@ -275,7 +275,7 @@ PUB MAIN | bPressed, previousState
     
   mainCogId     := cogid
   serialCogId   := -1
-  CLOCK.INIT(FULL_SPEED>>4)       ' provide external crystal freq
+  CLOCK.INIT(FULL_SPEED/16)       ' provide external crystal freq
 
   START_WATCHDOG
 
@@ -299,20 +299,21 @@ PUB MAIN | bPressed, previousState
             if bPressed                      'wake up from sleep and enter continuous mode
               mainState  := TURNING_ON
               acqMode    := CONT
+              onDuration := 0
+
 
           TRIG  :                            'wake up from sleep because trigger time arrived
             OUTA[WAKEUP] := 1
             OUTA[WAKEUP] := 0
 
-            if (rtcMinute//interval)==(interval - 1) AND (rtcSecond > 40) OR bPressed
+            if ((rtcMinute//interval)==(interval - 1) AND (rtcSecond > 40)) OR bPressed
               mainState  := TURNING_ON
               acqMode    := TRIG
-
-            else
-              if (CNT - lastRTCcheck) > (clkfreq<<1) ' avoid checking the RTC too often
-                lastRTCcheck := CNT
+              
+            if (CNT - lastRTCcheck) > (clkfreq<<1)   ' avoid checking the RTC too often; how about every 2 seconds
                 PEBBLE.LED2_ON                       ' blink LED to indicate TRIG mode
                 READ_RTC
+                lastRTCcheck := CNT
                 PEBBLE.LED2_OFF
 
 
@@ -328,16 +329,14 @@ PUB MAIN | bPressed, previousState
             START_ACQUISITION
             mainState := ON
             recordComplete := FALSE
-            offSec := recordLength  '
-            offMin := (rtcMinute + 1)//60
-            UARTS.STR(DEBUG, string(13, "New Offtime: "))
-            UARTS.DEC(DEBUG, offMin)
-            UARTS.PUTC(DEBUG,":")
-            UARTS.DEC(DEBUG, offSec)
+            onDuration := 30 - 10 ' normally this is set to 30 seconds, but with no button press it should only be 10 seconds
+            UARTS.STR(DEBUG, string(13, "Resetting onDuration: "))
+            uarts.dec(debug, onDuration)
           CONT :
             UARTS.STR(DEBUG, string("Continuous"))
             START_ACQUISITION
             mainState := ON
+            onDuration := 0
           OTHER :
             UARTS.STR(DEBUG, string("Something is wrong; Turning on in CONT mode."))
             PAUSE_MS(5000)
@@ -350,20 +349,19 @@ PUB MAIN | bPressed, previousState
 
         case acqMode
           CONT : 
-            if bpressed
-              UPDATE_OFF_TIME           ' set turn-off time 30 seconds into the future
+            if bPressed
+              onDuration := 0
 
-              if oledOn == FALSE
-                UARTS.STR(DEBUG, string(13,"Turning OLED ON"))
-                PEBBLE.OLED_ON                
-                oledOn := TRUE
-                NEXT            ' turn on oled and skip to quit out to repeat loop                
-            
-            if oledOn
+            if oledOn == FALSE AND bPressed
+              UARTS.STR(DEBUG, string(13,"Turning OLED ON"))
+              PEBBLE.OLED_ON                
+              oledOn := TRUE
+              onDuration := 0
+            else 
               MENU_SYSTEM(bPressed)
-            '  if (rtcSecond == offSec) AND (rtcMinute == offMin)    ' turn off the oled
-            '    oledOn := FALSE
-            '    PEBBLE.OLED_OFF
+              if onDuration > 30    ' is it time to turn off the OLED?
+                oledOn := FALSE
+                PEBBLE.OLED_OFF
 
             if (CNT - led2Time) > FULL_SPEED    ' toggle the LED slowly
               led2Time := CNT
@@ -377,12 +375,12 @@ PUB MAIN | bPressed, previousState
           TRIG :     
             MENU_SYSTEM(bPressed)
 
-            if NOT(recordComplete) ' have we completed this record?  If so, turn off  
+            if recordComplete == FALSE' have we completed this record?  If so, turn off  
               if (rtcMinute//interval==0) AND rtcSecond == recordLength
                 UARTS.STR(DEBUG, string(13,"Record Complete"))
                 recordComplete := TRUE
                 
-            if recordComplete 'AND (rtcSecond => offSec) AND (rtcMinute => offMin)
+            if recordComplete AND onDuration > 30
               mainState := TURNING_OFF
               acqMode   := TRIG
 
@@ -398,6 +396,7 @@ PUB MAIN | bPressed, previousState
       TURNING_OFF :
         TURN_SYSTEM_OFF
         mainState := OFF
+        lastRTCcheck := CNT
 
 
 PUB WAKE_SYSTEM(newAcqMode) | displayTime 
@@ -507,8 +506,6 @@ PUB WAKE_SYSTEM(newAcqMode) | displayTime
   UARTS.STR(DEBUG, string(13, "$PSMSG, "))
   UARTS.STR(DEBUG, @versionMsg)
 
-  UPDATE_OFF_TIME             ' get a useful starting off time
-
 PUB TURN_SYSTEM_OFF | i
 '' method that shuts things down beforing going into OFF/SLEEP mode
 '' send shutdown message to gumstix, kill off running cogs except
@@ -546,7 +543,6 @@ PUB TURN_SYSTEM_OFF | i
   'CLOCK.SetMode(CLOCK#XTAL1_PLL16x)  ' set clock to 100Mhz
   START_WATCHDOG          ' we need to start the watch dog with the new clockspeed
   'CLOCK.SetMode(CLOCK#RCSLOW_) ' rcslow seems too slow; xtal1 seems lower power than rcfast and is more stable
-  lastRTCcheck := CNT
 
 PUB MENU_SYSTEM(bPressed)
 ' method that displays and handles the menu system
@@ -559,7 +555,7 @@ PUB MENU_SYSTEM(bPressed)
 
   case menuState
     MENU_NONE        :
-      PEBBLE.OLED_WRITE_LINE1(string("Regular Mode    "))
+      'PEBBLE.OLED_WRITE_LINE1(string("Regular Mode    "))
       if bPressed 
         menuState      := MENU_PROMPT_TRIG
         requestedState := TRIG
@@ -569,7 +565,7 @@ PUB MENU_SYSTEM(bPressed)
     
     MENU_PROMPT_TRIG : ' In xxxx --> TRIG'
       if (cnt - menuPressTime) > MENU_TIMEOUT      ' if we've timed out
-        menuState        := MENU_CONFIRM                       ' assume this is the desired state; advance to cnofirm 
+        menuState        := MENU_CONFIRM           ' assume this is the desired state; advance to cnofirm 
         menuPressTime    := cnt
       else
         if bPressed ' 
@@ -581,7 +577,7 @@ PUB MENU_SYSTEM(bPressed)
 
     MENU_PROMPT_CONT : ' In xxxx --> CONT'
       if (cnt - menuPressTime) > MENU_TIMEOUT      ' if we've timed out
-        menuState        := MENU_CONFIRM                       ' assume this is the desired state; advance to cnofirm 
+        menuState        := MENU_CONFIRM           ' assume this is the desired state; advance to cnofirm 
         menuPressTime    := cnt
       else
         if bPressed ' 
@@ -593,7 +589,7 @@ PUB MENU_SYSTEM(bPressed)
 
     MENU_PROMPT_OFF : ' In xxxx --> TRIG'
       if (cnt - menuPressTime) > MENU_TIMEOUT      ' if we've timed out
-        menuState        := MENU_CONFIRM                       ' assume this is the desired state; advance to cnofirm 
+        menuState        := MENU_CONFIRM           ' assume this is the desired state; advance to cnofirm 
         menuPressTime    := cnt
       else
         if bPressed ' 
@@ -605,7 +601,7 @@ PUB MENU_SYSTEM(bPressed)
 
     MENU_CONFIRM : ' Press to confirm choice
       if (cnt - menuPressTime) > MENU_TIMEOUT      ' if we've timed out
-        menuState := MENU_NONE                          ' return to beginning 
+        menuState := MENU_NONE                     ' return to beginning 
         UARTS.STR(DEBUG, string(13, "No response; timed out."))
       else
         if bPressed ' 
@@ -645,6 +641,7 @@ PUB BUTTON_PRESSED  : buttonPressed
           led1on        := TRUE
           buttonState   := BUTTON_HOLDOFF
           buttonPressed := TRUE
+          onDuration    := 0
           displayDark   := CNT
       
       if INA[REED_SWITCH] == NOT_PRESSED
@@ -654,6 +651,7 @@ PUB BUTTON_PRESSED  : buttonPressed
           led1on        := TRUE
           buttonState   := BUTTON_HOLDOFF
           buttonPressed := TRUE
+          onDuration    := 0
         else                              ' not pressed long enough
           buttonState := WAITING_FOR_PRESS
 
@@ -662,7 +660,7 @@ PUB BUTTON_PRESSED  : buttonPressed
         PEBBLE.LED1_OFF
         led1on := FALSE
         
-      if CNT-onTime > clkfreq<<1
+      if CNT-onTime > clkfreq<<1       ' 2 second hold-off
         buttonState := WAITING_FOR_PRESS
     
 
@@ -788,8 +786,12 @@ PUB DO_SOMETHING_USEFUL | rxByte, response, idx
   case edgeDetector 
     %01 : ' rising edge -> grab phsb
       cntsTemp := CNT - PHSB
+      onDuration++
       UPDATE_TIME_AND_DATE                   ' KEEP IN MIND WE ALWAYS UPDATE TIME/DATE ON THE PPS following OUR MESSAGE SO WE ARE BEHIND ONE SECOND
-      'PRINT_TIME_AND_DATE
+      UARTS.STR(DEBUG, string(13, "menuState:      "))
+      UARTS.DEC(DEBUG, menuState)
+      UARTS.STR(DEBUG, string(" onDuration: "))
+      UARTS.DEC(DEBUG, onDuration)
       case menuState
         MENU_NONE        :
           PRINT_TIME_AND_DATE
@@ -1021,7 +1023,7 @@ PUB PRINT_TIME_AND_DATE
   PRINT_RTC_TIME
 ' print the RTC and GPS time and dates
   ' don't do this in ON state, gumstix owns line1 and 2 of oled
-  if mainState <> ON
+'  if mainState == ON
     oLedBuf[ 0] := "0" #> (rtcYear  / 10 // 10+ "0"   ) <# "9"
     oLedBuf[ 1] := "0" #> (rtcYear // 10 + "0"        ) <# "9"
     oLedBuf[ 2] := "0" #> (rtcMonth  / 10 // 10 + "0" ) <# "9"               ' divide first to guarnatee result is less than 10
@@ -1510,7 +1512,7 @@ PUB GET_GPS_LOCK | idx, response
       response := UBX.READ_AND_PROCESS_BYTE(FALSE)
     until response == -1 OR response == UBX#RXMRAW
     
-  until ((gpsValid>>2 & %1) == %1)  OR idx == 15'CONSTANT(3 * 60)
+  until ((gpsValid>>2 & %1) == %1)  OR idx == 3'CONSTANT(3 * 60)
 
   if ((gpsValid>>2 & %1) == %1)
     UARTS.STR(DEBUG, string(13, "$PSMSG, GPS Locked."))
@@ -1769,7 +1771,7 @@ PUB DISPLAY_ON_OLED(line,strPtr)
       1 :PEBBLE.OLED_WRITE_LINE1(strPtr)
       2 :PEBBLE.OLED_WRITE_LINE2(strPtr)
 
-PUB UPDATE_OFF_TIME
+{PUB UPDATE_OFF_TIME
 ' method that sets the off time 30 seconds into the future
   offSec := rtcSecond + 30  '
   if offSec > 59
@@ -1786,7 +1788,7 @@ PUB UPDATE_OFF_TIME
     UARTS.PUTC(DEBUG,":")
     UARTS.DEC(DEBUG, offSec)
     
-    
+}    
 PUB PAUSE_MS_SLEEP(ms)
   waitcnt(SLEEP_SPEED/1000 * mS + cnt)
 
