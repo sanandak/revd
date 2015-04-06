@@ -309,6 +309,11 @@ PUB MAIN | bPressed, previousState
             if ((rtcMinute//interval)==(interval - 1) AND (rtcSecond > 40)) OR bPressed
               mainState  := TURNING_ON
               acqMode    := TRIG
+              if bPressed
+                onDuration := 0
+                recordComplete := FALSE
+              else
+                onDuration := 30 - 10 ' normally this is set to 30 seconds, but with no button press it should only be 10 seconds
               
             if (CNT - lastRTCcheck) > (clkfreq<<1)   ' avoid checking the RTC too often; how about every 2 seconds
                 PEBBLE.LED2_ON                       ' blink LED to indicate TRIG mode
@@ -329,9 +334,6 @@ PUB MAIN | bPressed, previousState
             START_ACQUISITION
             mainState := ON
             recordComplete := FALSE
-            onDuration := 30 - 10 ' normally this is set to 30 seconds, but with no button press it should only be 10 seconds
-            UARTS.STR(DEBUG, string(13, "Resetting onDuration: "))
-            uarts.dec(debug, onDuration)
           CONT :
             UARTS.STR(DEBUG, string("Continuous"))
             START_ACQUISITION
@@ -375,7 +377,7 @@ PUB MAIN | bPressed, previousState
           TRIG :     
             MENU_SYSTEM(bPressed)
 
-            if recordComplete == FALSE' have we completed this record?  If so, turn off  
+            if recordComplete == FALSE ' have we completed this record?  If so, turn off  
               if (rtcMinute//interval==0) AND rtcSecond == recordLength
                 UARTS.STR(DEBUG, string(13,"Record Complete"))
                 recordComplete := TRUE
@@ -635,7 +637,7 @@ PUB BUTTON_PRESSED  : buttonPressed
         buttonState := WAITING_FOR_RELEASE
   
     WAITING_FOR_RELEASE :
-      if INA[REED_SWITCH] == PRESSED AND (CNT-pressTime) > clkfreq ' button currently held for more than one second
+      if INA[REED_SWITCH] == PRESSED AND (CNT-pressTime) > clkfreq>>1 ' button currently held for more than one second
           PEBBLE.LED1_ON                  ' indicate that the button WAS pressed
           onTime        := CNT
           led1on        := TRUE
@@ -645,7 +647,7 @@ PUB BUTTON_PRESSED  : buttonPressed
           displayDark   := CNT
       
       if INA[REED_SWITCH] == NOT_PRESSED
-        if (CNT-pressTime) > clkfreq      ' pressed for more than a second      
+        if (CNT-pressTime) > clkfreq>>1      ' pressed for more than a second      
           PEBBLE.LED1_ON                  ' indicate that the button WAS pressed
           onTime        := CNT
           led1on        := TRUE
