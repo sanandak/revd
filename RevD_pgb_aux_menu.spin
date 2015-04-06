@@ -417,7 +417,7 @@ PUB WAKE_SYSTEM(newAcqMode) | displayTime
     CLOCK.SetMode(CLOCK#XTAL1_PLL16x)  ' set clock to 100Mhz
     START_WATCHDOG          ' we need to start the watch dog with the new clockspeed
 
-  PEBBLE.LED1_OFF               ' turn OFF LED1 
+  'PEBBLE.LED1_OFF               ' turn OFF LED1 
   PEBBLE.LED2_ON                ' turn ON  LED2  indicating we are acquiring data
   led2Time := CNT
   PEBBLE.GUMSTIX_ON             ' sak preferes to have gumstix on right away
