@@ -196,21 +196,16 @@ CON ' button states
 CON ' menu states'
   #0, MENU_NONE, MENU_PROMPT_TRIG, MENU_PROMPT_CONT, MENU_PROMPT_OFF, MENU_CONFIRM, MENU_INFORM
   #0, PEBBLE_TRIG, PEBBLE_CONT, PEBBLE_SHUT ' possible requested states'
-  MENU_TIMEOUT  = 4000 * ONE_MS  ' stay in a menu for this time before timing out'
 
-CON ' Reed Switch constants
+CON ' timeout constants
   WATCH_DOG_TIMEOUT_MS =   15_000       ' time in ms allowed to elapse before watchdog reboots system
-  PROGRAM_TIMEOUT_MS   =   10_000       ' number of ms button button must be pressed to place system into programming state 
-  REBOOT_TIMEOUT_MS    =    5_000       ' number of ms the button must be pressed ONCE in PROGRAMMING state to force a software reboot
-  SLEEP_PRESS_MS       =    2_000       ' number of ms the button must be pressed to put the unit to sleep when it is in continuous mode
-  CONTINUOUS_PRESS_MS  =    5_000       ' number of ms the button must be pressed to put the unit in to continuous mode
   MAG_ACC_TIMER_MS     =      250       ' number of ms between MAG/ACC readings
+  SHUTDOWN_TIMEOUT_MS  =   10_000
+  MENU_TIMEOUT_MS      =     4000       ' stay in a menu for this time before timing out'
   
-  PROGRAM_TIMEOUT_CNT   =  PROGRAM_TIMEOUT_MS    * ONE_MS
-  REBOOT_TIMEOUT_CNT    =  REBOOT_TIMEOUT_MS     * ONE_MS
-  SLEEP_PRESS_CNT       =  SLEEP_PRESS_MS        * ONE_MS
-  CONTINUOUS_PRESS_CNT  =  CONTINUOUS_PRESS_MS   * ONE_MS  
-  MAG_ACC_TIMER_CNT     =  MAG_ACC_TIMER_MS      * ONE_MS
+  MAG_ACC_INTERVAL     =  MAG_ACC_TIMER_MS    * ONE_MS
+  SHUTDOWN_TIMEOUT     =  SHUTDOWN_TIMEOUT_MS * ONE_MS
+  MENU_TIMEOUT         =  MENU_TIMEOUT_MS     * ONE_MS  ' stay in a menu for this time before timing out'
   
 DAT ' oled messages
   sleepMsg   byte   "Sleeping System.", 0
@@ -508,6 +503,18 @@ PUB WAKE_SYSTEM(newAcqMode) | displayTime
   UARTS.STR(DEBUG, string(13, "$PSMSG, "))
   UARTS.STR(DEBUG, @versionMsg)
 
+{' P4 pin testing
+  STOP_WATCHDOG
+  DIRA[SPARE] := 0 ' set to input
+  repeat
+    PAUSE_MS(1000)
+    UARTS.STR(DEBUG, string(13, "P4: "))
+    if INA[SPARE] == 1
+      UARTS.STR(DEBUG, string("HIGH"))
+    else
+      UARTS.STR(DEBUG, string("LOW"))
+}
+    
 PUB TURN_SYSTEM_OFF | i
 '' method that shuts things down beforing going into OFF/SLEEP mode
 '' send shutdown message to gumstix, kill off running cogs except
@@ -520,9 +527,12 @@ PUB TURN_SYSTEM_OFF | i
   DISPLAY_ON_OLED(2,@magnetMsg)
   DIRA[SLAVE_IRQ] := 1         ' raise IRQ line so gumstix doesn't keep acquiring
   OUTA[SLAVE_IRQ] := 1    
-  PAUSE_MS(4_000)
-  PET_WATCHDOG
-  PAUSE_MS(5_000)
+
+  i := cnt
+  repeat
+    PET_WATCHDOG
+    PAUSE_MS(100)
+  until INA[SPARE] == 0 OR (CNT - i) > SHUTDOWN_TIMEOUT
 
   PEBBLE.SET_EXPANDER_TO_LOW_POWER
   oledOn := FALSE
@@ -826,7 +836,7 @@ PUB DO_SOMETHING_USEFUL | rxByte, response, idx
       PHSB := 0
 
   ' if it's time for a MAG/ACC measurement, go get it
-  if (CNT - magAccTimer) > MAG_ACC_TIMER_CNT
+  if (CNT - magAccTimer) > MAG_ACC_INTERVAL
     magAccTimer := CNT
     magAccSampleCnt++
     auxBuffer1[auxIdx++] := PEBBLE.GET_ACC_X
