@@ -819,14 +819,14 @@ PUB DO_SOMETHING_USEFUL | rxByte, response, idx
   if (CNT - magAccTimer) > MAG_ACC_TIMER_CNT
     magAccTimer := CNT
     magAccSampleCnt++
-    auxBuffer1[auxIdx++] := PEBBLE.GET_ACC_X
-    auxBuffer1[auxIdx++] := PEBBLE.GET_ACC_Y
-    auxBuffer1[auxIdx++] := PEBBLE.GET_ACC_Z
+    auxBuffer1[auxIdx++ <# 128] := PEBBLE.GET_ACC_X
+    auxBuffer1[auxIdx++ <# 128] := PEBBLE.GET_ACC_Y
+    auxBuffer1[auxIdx++ <# 128] := PEBBLE.GET_ACC_Z
     PEBBLE.READ_MAG             ' we need to read the mag before the others are populated.  
-    auxBuffer1[auxIdx++] := PEBBLE.GET_MAG_X
-    auxBuffer1[auxIdx++] := PEBBLE.GET_MAG_Y
-    auxBuffer1[auxIdx++] := PEBBLE.GET_MAG_Z
-    auxBuffer1[auxIdx++] := PEBBLE.READ_MAG_TEMP
+    auxBuffer1[auxIdx++ <# 128] := PEBBLE.GET_MAG_X
+    auxBuffer1[auxIdx++ <# 128] := PEBBLE.GET_MAG_Y
+    auxBuffer1[auxIdx++ <# 128] := PEBBLE.GET_MAG_Z
+    auxBuffer1[auxIdx++ <# 128] := PEBBLE.READ_MAG_TEMP
     if magAccSampleCnt == 15
       outa[wakeup]  := 1
       SEND_AUX_PACKET
