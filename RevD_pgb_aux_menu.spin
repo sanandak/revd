@@ -703,6 +703,43 @@ PUB WATCHDOG | timeSincePet, programMode, i
     if (CNT - watchDogTimer) > (clkfreq/1000 * WATCH_DOG_TIMEOUT_MS) 
       REBOOT
 
+  buttonPressed := FALSE
+  case buttonState
+    WAITING_FOR_PRESS :
+      if INA[REED_SWITCH] == PRESSED
+        pressTime   := CNT
+        buttonState := WAITING_FOR_RELEASE
+  
+    WAITING_FOR_RELEASE :
+      if INA[REED_SWITCH] == PRESSED AND (CNT-pressTime) > clkfreq>>1 ' button currently held for more than one second
+          PEBBLE.LED1_ON                  ' indicate that the button WAS pressed
+          onTime        := CNT
+          led1on        := TRUE
+          buttonState   := BUTTON_HOLDOFF
+          buttonPressed := TRUE
+          onDuration    := 0
+          displayDark   := CNT
+      
+      if INA[REED_SWITCH] == NOT_PRESSED
+        if (CNT-pressTime) > clkfreq>>1      ' pressed for more than a second      
+          PEBBLE.LED1_ON                  ' indicate that the button WAS pressed
+          onTime        := CNT
+          led1on        := TRUE
+          buttonState   := BUTTON_HOLDOFF
+          buttonPressed := TRUE
+          onDuration    := 0
+        else                              ' not pressed long enough
+          buttonState := WAITING_FOR_PRESS
+
+    BUTTON_HOLDOFF :            ' prevent method from seeing consecutive presses without some pause
+      if led1on AND (CNT-onTime) > clkfreq              ' is it time to turn off the LED
+        PEBBLE.LED1_OFF
+        led1on := FALSE
+        
+      if CNT-onTime > clkfreq<<1       ' 2 second hold-off
+        buttonState := WAITING_FOR_PRESS
+    
+
 
 PUB PET_WATCHDOG
   watchDogTimer := CNT   ' pet the watchdog                       
