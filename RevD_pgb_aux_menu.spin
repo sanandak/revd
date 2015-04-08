@@ -532,7 +532,7 @@ PUB TURN_SYSTEM_OFF | i
   repeat
     PET_WATCHDOG
     PAUSE_MS(100)
-  until INA[SPARE] == 1 OR (CNT - i) > SHUTDOWN_TIMEOUT
+  until {INA[SPARE] == 1 OR} (CNT - i) > SHUTDOWN_TIMEOUT
 
   PEBBLE.SET_EXPANDER_TO_LOW_POWER
   oledOn := FALSE
@@ -851,6 +851,7 @@ PUB DO_SOMETHING_USEFUL | rxByte, response, idx
       if magAccSampleCnt == 15
         outa[wakeup]  := 1
         SEND_AUX_PACKET
+        UARTS.STR(DEBUG, string(13,"$PSMSG, Sending AUX. "))
         outa[wakeup]  := 0
     
 
