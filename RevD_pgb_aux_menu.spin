@@ -703,7 +703,7 @@ PUB WATCHDOG | timeSincePet, programMode, i
     if (CNT - watchDogTimer) > (clkfreq/1000 * WATCH_DOG_TIMEOUT_MS) 
       REBOOT
 
-  buttonPressed := FALSE
+{  buttonPressed := FALSE
   case buttonState
     WAITING_FOR_PRESS :
       if INA[REED_SWITCH] == PRESSED
@@ -740,7 +740,7 @@ PUB WATCHDOG | timeSincePet, programMode, i
         buttonState := WAITING_FOR_PRESS
     
 
-
+}
 PUB PET_WATCHDOG
   watchDogTimer := CNT   ' pet the watchdog                       
 
