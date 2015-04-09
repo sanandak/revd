@@ -202,10 +202,12 @@ CON ' timeout constants
   MAG_ACC_TIMER_MS     =      250       ' number of ms between MAG/ACC readings
   SHUTDOWN_TIMEOUT_MS  =   10_000
   MENU_TIMEOUT_MS      =     4000       ' stay in a menu for this time before timing out'
+  BOOT_TIMEOUT_MS      =     5000
   
   MAG_ACC_INTERVAL     =  MAG_ACC_TIMER_MS    * ONE_MS
   SHUTDOWN_TIMEOUT     =  SHUTDOWN_TIMEOUT_MS * ONE_MS
   MENU_TIMEOUT         =  MENU_TIMEOUT_MS     * ONE_MS  ' stay in a menu for this time before timing out'
+  BOOT_TIMEOUT         =  BOOT_TIMEOUT_MS     * ONE_MS
   
 DAT ' oled messages
   sleepMsg   byte   "Sleeping System.", 0
@@ -278,6 +280,9 @@ PUB MAIN | bPressed, previousState
 
   DIRA[WAKEUP]  := 1
   OUTA[WAKEUP]  := 0
+
+  'pebble boot console- only available at startup/reboot
+  BOOT_CONSOLE
 
   mainState := TURNING_ON       ' mainState is NOT stored in SRAM
   acqMode   := BOOT             ' this indicates first boot
@@ -472,7 +477,7 @@ PUB WAKE_SYSTEM(newAcqMode) | displayTime
   GET_GPS_LOCK
 
   UPDATE_TIME_AND_DATE
-  PRINT_TIME_AND_DATE
+  PRINT_TIME_AND_DATE(TRUE)
   PET_WATCHDOG
   PAUSE_MS(2000)
 
@@ -689,13 +694,15 @@ PUB STOP_WATCHDOG
   cogstop(watchDogCogId)
   watchDogCogId := -1
       
-PUB WATCHDOG | timeSincePet, programMode, i
+PUB WATCHDOG | resetPressed, resetState 
 '' Watchdog function.  Should be started in its own cog.
 '' This watchdog does 1 thing it watches a shared memory location (single LONG in HUB).  If that location
 ''     isn't updated evert WATCH_DOG_TIMEOUT_CNT this cog will reboot the prop.
 
   watchDogTimer := CNT          ' init time so we don't reboot right away
-
+  resetPressed  := FALSE
+  resetState    := WAITING_FOR_PRESS
+  
   repeat
     PAUSE_MS(10)                ' spend some time sleeping but not too much
 
@@ -703,44 +710,23 @@ PUB WATCHDOG | timeSincePet, programMode, i
     if (CNT - watchDogTimer) > (clkfreq/1000 * WATCH_DOG_TIMEOUT_MS) 
       REBOOT
 
-  buttonPressed := FALSE
-  case buttonState
-    WAITING_FOR_PRESS :
-      if INA[REED_SWITCH] == PRESSED
-        pressTime   := CNT
-        buttonState := WAITING_FOR_RELEASE
-  
-    WAITING_FOR_RELEASE :
-      if INA[REED_SWITCH] == PRESSED AND (CNT-pressTime) > clkfreq>>1 ' button currently held for more than one second
-          PEBBLE.LED1_ON                  ' indicate that the button WAS pressed
-          onTime        := CNT
-          led1on        := TRUE
-          buttonState   := BUTTON_HOLDOFF
-          buttonPressed := TRUE
-          onDuration    := 0
-          displayDark   := CNT
-      
-      if INA[REED_SWITCH] == NOT_PRESSED
-        if (CNT-pressTime) > clkfreq>>1      ' pressed for more than a second      
-          PEBBLE.LED1_ON                  ' indicate that the button WAS pressed
-          onTime        := CNT
-          led1on        := TRUE
-          buttonState   := BUTTON_HOLDOFF
-          buttonPressed := TRUE
-          onDuration    := 0
-        else                              ' not pressed long enough
-          buttonState := WAITING_FOR_PRESS
 
-    BUTTON_HOLDOFF :            ' prevent method from seeing consecutive presses without some pause
-      if led1on AND (CNT-onTime) > clkfreq              ' is it time to turn off the LED
-        PEBBLE.LED1_OFF
-        led1on := FALSE
-        
-      if CNT-onTime > clkfreq<<1       ' 2 second hold-off
-        buttonState := WAITING_FOR_PRESS
+{    case resetState
+      WAITING_FOR_PRESS :
+        if INA[REED_SWITCH] == PRESSED
+          resetPressed := CNT
+          resetState   := WAITING_FOR_RELEASE
     
-
-
+      WAITING_FOR_RELEASE :
+        if INA[REED_SWITCH] == PRESSED AND (CNT-resetPressed) > clkfreq*15 ' button currently held for more than one second
+          REBOOT
+                
+        if INA[REED_SWITCH] == NOT_PRESSED
+          if (CNT-resetPressed) > clkfreq>>1      ' pressed for more than a second
+            REBOOT
+          else                              ' not pressed long enough
+            buttonState := WAITING_FOR_PRESS
+}  
 PUB PET_WATCHDOG
   watchDogTimer := CNT   ' pet the watchdog                       
 
@@ -843,7 +829,7 @@ PUB DO_SOMETHING_USEFUL | rxByte, response, idx
       UARTS.DEC(DEBUG, onDuration)
       case menuState
         MENU_NONE        :
-          PRINT_TIME_AND_DATE
+          PRINT_TIME_AND_DATE(FALSE)
         MENU_PROMPT_TRIG :
           DISPLAY_ON_OLED(1,string("SWITCH TO TRIG? "))
         MENU_PROMPT_CONT :                                
@@ -1070,11 +1056,11 @@ PUB PRINT_RTC_TIME
   uarts.putc(debug, ":")
   uarts.dec(debug, rtcsecond)
 
-PUB PRINT_TIME_AND_DATE
+PUB PRINT_TIME_AND_DATE(display)
   PRINT_RTC_TIME
 ' print the RTC and GPS time and dates
   ' don't do this in ON state, gumstix owns line1 and 2 of oled
-'  if mainState == ON
+  if display
     oLedBuf[ 0] := "0" #> (rtcYear  / 10 // 10+ "0"   ) <# "9"
     oLedBuf[ 1] := "0" #> (rtcYear // 10 + "0"        ) <# "9"
     oLedBuf[ 2] := "0" #> (rtcMonth  / 10 // 10 + "0" ) <# "9"               ' divide first to guarnatee result is less than 10
@@ -1553,7 +1539,7 @@ PUB GET_GPS_LOCK | idx, response
         idx++
         cntsTemp := CNT - PHSB
         UPDATE_TIME_AND_DATE
-        PRINT_TIME_AND_DATE
+        PRINT_TIME_AND_DATE(TRUE)
         UARTS.PUTC(DEBUG, COMMA)
         UARTS.DEC(DEBUG, idx)
       %10 : ' falling edge now we can reset phsb since it won't increment until PPS goes high again
@@ -1821,6 +1807,64 @@ PUB DISPLAY_ON_OLED(line,strPtr)
     case line
       1 :PEBBLE.OLED_WRITE_LINE1(strPtr)
       2 :PEBBLE.OLED_WRITE_LINE2(strPtr)
+
+PUB BOOT_CONSOLE | startTime, bPressed
+' boot into console mode.  A button press here puts us into programming mode
+' no button press and we timout and boot normally
+' to exit console mode, another button press is required.
+  PEBBLE.LEDS_ON                ' turn ON  LED2  indicating we are acquiring data
+  DIRA[SLAVE_IRQ..SLAVE_SCLK] := 0        ' make sure this cog isn't holding SLAVE lines captive
+  DIRA[SLAVE_IRQ] := 1          ' make this an output
+  OUTA[SLAVE_IRQ] := 1          ' hold this high so the gumstix doesn't hunt for data
+  PEBBLE.OLED_ON                ' turn on and init oled
+  oledOn := TRUE
+  PET_WATCHDOG
+
+  PAUSE_MS(100)
+  DISPLAY_ON_OLED(1,string("Boot Console    "))
+  PEBBLE.LEDS_OFF                ' turn ON  LED2  indicating we are acquiring data
+  PAUSE_MS(1000)
+  DISPLAY_ON_OLED(2,string("Press to Enter  "))
+  startTime := CNT
+  bPressed  := FALSE
+  
+  repeat until bPressed OR (CNT - startTime > BOOT_TIMEOUT)
+    PAUSE_MS(10)
+    bPressed := BUTTON_PRESSED  ' check for button press
+    PET_WATCHDOG
+
+  if bPressed                   ' if button pressed enter programming mode
+    PEBBLE.GUMSTIX_ON             ' sak preferes to have gumstix on right away
+    PAUSE_MS(100)            '12345678901234567890
+    DISPLAY_ON_OLED(1,string("Program Mode    "))
+    PAUSE_MS(100)
+    DISPLAY_ON_OLED(2,string("Press to Exit   "))
+    LAUNCH_SERIAL_COG             ' handle the 2 serial ports- debug and GPS
+    bPressed  := FALSE
+    startTime := 0
+    repeat until bPressed
+      PAUSE_MS(10)
+      startTime++
+      if startTime == 100
+        startTime := 0
+        UARTS.STR(DEBUG,string(13,"$PSMSG, Program Mode."))
+      bPressed := BUTTON_PRESSED  ' check for button press
+      PET_WATCHDOG
+    PEBBLE.GUMSTIX_OFF
+    DISPLAY_ON_OLED(1,string("Booting         "))
+    PAUSE_MS(100)
+    DISPLAY_ON_OLED(2,string("Normally        "))
+    PAUSE_MS(2000)
+      
+  ' if we get out of this loop we should proceed with normal boot
+  PEBBLE.LEDS_OFF
+  PEBBLE.OLED_OFF
+  oledOn := FALSE
+  
+  if serialCogId > 0
+    cogstop(serialCogId)
+    serialCogId := -1
+  DIRA[SLAVE_IRQ] := 0          ' make this an input
 
 {PUB UPDATE_OFF_TIME
 ' method that sets the off time 30 seconds into the future
