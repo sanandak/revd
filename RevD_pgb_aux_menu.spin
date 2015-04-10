@@ -823,7 +823,7 @@ PUB DO_SOMETHING_USEFUL | rxByte, response, idx
       cntsTemp := CNT - PHSB
       onDuration++
       UPDATE_TIME_AND_DATE                   ' KEEP IN MIND WE ALWAYS UPDATE TIME/DATE ON THE PPS following OUR MESSAGE SO WE ARE BEHIND ONE SECOND
-      UARTS.STR(DEBUG, string(13, "menuState:      "))
+      UARTS.STR(DEBUG, string(13, "$PSMSG, menuState:      "))
       UARTS.DEC(DEBUG, menuState)
       UARTS.STR(DEBUG, string(" onDuration: "))
       UARTS.DEC(DEBUG, onDuration)
@@ -1029,7 +1029,7 @@ PUB UPDATE_TIME_AND_DATE | isLeapYear
     5 : lockType := "T"             ' Time only fix
     OTHER: lockType := "X"          ' unknown- this shouldn't happen 
 
-  if (gpsValid > 2)         ' if the gps time is correct; not to be confused with UTC time
+  if (fixStat > 1)         ' if the gps time is correct; not to be confused with UTC time
     if rtcYear <> year OR rtcMonth <> month OR rtcDay <> day OR rtcHour <> hour OR rtcMinute <> minute
       UARTS.STR(DEBUG,string(13,"$PSMSG, Updating RTC from GPS large mismatch:"))
       PEBBLE.SET_RTC_TIME(year, month, day, hour, minute, second, 0)            ' use gps time to update rtc
