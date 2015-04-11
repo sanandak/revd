@@ -2839,5 +2839,5 @@ masterPtr         res             1
 masterBasePtr     res             1
 moutData          res             1
 minData           res             1
-                 FIT 496    
+                 FIT 496                                       
                  
