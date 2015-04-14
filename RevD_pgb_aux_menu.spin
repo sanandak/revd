@@ -203,18 +203,20 @@ CON ' timeout constants
   SHUTDOWN_TIMEOUT_MS  =   10_000
   MENU_TIMEOUT_MS      =     4000       ' stay in a menu for this time before timing out'
   BOOT_TIMEOUT_MS      =     5000
+  UART_TIMEOUT_MS      =      250
   
   MAG_ACC_INTERVAL     =  MAG_ACC_TIMER_MS    * ONE_MS
   SHUTDOWN_TIMEOUT     =  SHUTDOWN_TIMEOUT_MS * ONE_MS
   MENU_TIMEOUT         =  MENU_TIMEOUT_MS     * ONE_MS  ' stay in a menu for this time before timing out'
   BOOT_TIMEOUT         =  BOOT_TIMEOUT_MS     * ONE_MS
+  UART_TIMEOUT         =  UART_TIMEOUT_MS     * ONE_MS
   
 DAT ' oled messages
   sleepMsg   byte   "Sleeping System.", 0
   awakeMsg   byte   "System Ready.   ", 0
   magnetMsg  byte   "Wake with Magnet", 0
   euiMsg     byte   "SN:             ", 0
-  versionMsg byte   "Version 2.2.pgb ", 0
+  versionMsg byte   "Version 2.3.pgb ", 0
 
 OBJ                                  
   UARTS     : "FullDuplexSerial4portPlus_0v3"       '1 COG for 3 serial ports
@@ -281,6 +283,9 @@ PUB MAIN | bPressed, previousState
   DIRA[WAKEUP]  := 1
   OUTA[WAKEUP]  := 0
 
+  DIRA[RADIO_CS]  := 1
+  OUTA[RADIO_CS]  := 0
+
   'pebble boot console- only available at startup/reboot
   BOOT_CONSOLE
 
@@ -296,11 +301,18 @@ PUB MAIN | bPressed, previousState
       OFF  :                    ' mainState can only be OFF if the acqMode is SLEEP or we are sleeping between triggers
         case acqMode
           SLEEP : 
+            OUTA[RADIO_CS] := 1
             if bPressed                      'wake up from sleep and enter continuous mode
               mainState  := TURNING_ON
               acqMode    := CONT
               onDuration := 0
+            OUTA[RADIO_CS] := 0
 
+'          CONT : 
+'            if bPressed                      'wake up from sleep and enter continuous mode
+'              mainState  := TURNING_ON
+'              acqMode    := CONT
+'              onDuration := 0
 
           TRIG  :                            'wake up from sleep because trigger time arrived
             OUTA[WAKEUP] := 1
@@ -361,7 +373,7 @@ PUB MAIN | bPressed, previousState
               onDuration := 0
             else 
               MENU_SYSTEM(bPressed)
-              if onDuration > 30    ' is it time to turn off the OLED?
+              if oledON == TRUE AND onDuration > 30    ' is it time to turn off the OLED?
                 oledOn := FALSE
                 PEBBLE.OLED_OFF
 
@@ -781,40 +793,46 @@ PUB GET_AND_PRINT_PARAMETERS
   GET_PARAMETERS_FROM_SRAM
   PRINT_SYSTEM_PARAMETERS                                                     
 
-PUB DO_SOMETHING_USEFUL | rxByte, response, idx
+PUB DO_SOMETHING_USEFUL | rxByte, response, idx, start
 ' put things here that need to be done but have some timing flexibility
 ' all of this happens in the top level cog
 
   ' here we collect bytes from uart and process them.
   ' this should follow the same setup as the ublox I think
    rxByte := uarts.rxcheck(DEBUG)       ' collect byte from DEBUG port
-   case uartState
-      WAITING_FOR_START :
-        if rxByte == "$"                     ' beginning of a new string
-          inUartIdx := 0
-          ptrIdx    := 0
-          bytefill(@inUartIdx, 0, UART_SIZE) ' buffer for all incoming bytes
-          bytefill(@inUartPtr, 0, MAX_COMMANDS) ' contains the index of each field 
-          uartState := WAITING_FOR_END
-
-      WAITING_FOR_END   :
-        if rxByte <> -1
-          case rxByte
-            ","    :
-              inUartBuf[inUartIdx++ <# UART_SIZE] := 0          ' zero terminate strings
-              inUartPtr[++ptrIdx] := inUartIdx <# MAX_COMMANDS
-              uartState := WAITING_FOR_END
-            "%"   :
-              inUartBuf[inUartIdx++ <# UART_SIZE] := 0 ' <-- ADD THIS zero terminate string
-              uartState := PROCESS_BUFFER
-            OTHER : 
-              inUartBuf[inUartIdx++ <# UART_SIZE] := rxByte     ' if not, keep adding to it
-              uartState := WAITING_FOR_END
-
-     PROCESS_BUFFER     :
-       PROCESS_UART
-       uartState := WAITING_FOR_START
-    
+   if rxByte => 32 AND rxByte =< 122         ' only keep printable characters.  No JUNK!
+     case uartState
+        WAITING_FOR_START :
+          if rxByte == "$"                     ' beginning of a new string
+            start     := CNT
+            inUartIdx := 0
+            ptrIdx    := 0
+            bytefill(@inUartIdx, 0, UART_SIZE) ' buffer for all incoming bytes
+            bytefill(@inUartPtr, 0, MAX_COMMANDS) ' contains the index of each field 
+            uartState := WAITING_FOR_END
+  
+        WAITING_FOR_END   :
+          if (CNT - start > UART_TIMEOUT)
+            UARTS.STR(DEBUG, string(13, "$PSMSG, UART timeout."))
+            uartState := WAITING_FOR_START
+          
+          if rxByte <> -1
+            case rxByte
+              ","    :
+                inUartBuf[inUartIdx++ <# UART_SIZE] := 0          ' zero terminate strings
+                inUartPtr[++ptrIdx] := inUartIdx <# MAX_COMMANDS
+                uartState := WAITING_FOR_END
+              "%"   :
+                inUartBuf[inUartIdx++ <# UART_SIZE] := 0 ' <-- ADD THIS zero terminate string
+                uartState := PROCESS_BUFFER
+              OTHER :
+                  inUartBuf[inUartIdx++ <# UART_SIZE] := rxByte     ' if not, keep adding to it
+                  uartState := WAITING_FOR_END
+  
+       PROCESS_BUFFER     :
+         PROCESS_UART
+         uartState := WAITING_FOR_START
+      
 
 
   edgeDetector := ((edgeDetector << 1) | INA[GPS_PPS] ) & %11    
@@ -1035,7 +1053,7 @@ PUB UPDATE_TIME_AND_DATE | isLeapYear
       PEBBLE.SET_RTC_TIME(year, month, day, hour, minute, second, 0)            ' use gps time to update rtc
       READ_RTC
       PRINT_RTC_TIME
-    if (||(second-rtcSecond)>2)         ' if the gps and RTC time are not within a couple seconds
+    if (||(second-rtcSecond)>4)         ' if the gps and RTC time are not within a couple seconds
       UARTS.STR(DEBUG,string(13,"$PSMSG, Updating RTC from GPS small mismatch:"))
       PEBBLE.SET_RTC_TIME(year, month, day, hour, minute, second, 0)            ' use gps time to update rtc
       READ_RTC
@@ -1226,29 +1244,32 @@ PUB PROCESS_UART | idx, pkpA, pkpB, pkpC, cursor
   case inUartBuf[0]
     KILL :                 'K
       UARTS.STR(DEBUG, string(13,"$PSCMD, KILL"))
-      PEBBLE.GUMSTIX_OFF
+      'PEBBLE.GUMSTIX_OFF
+      acqMode   := SLEEP           
+      mainState := TURNING_OFF
 
     SHUTDOWN_SYSTEM :      'D
       UARTS.STR(DEBUG, string(13,"$PSCMD, SHUTDOWN"))
-      PAUSE_MS(12_000)
-'      mainState := TURNING_OFF
+      acqMode   := SLEEP           
+      mainState := TURNING_OFF
 
     SOFT_REBOOT_GUMSTIX :  'S
       UARTS.STR(DEBUG, string(13,"$PSCMD, REBOOT"))
       PAUSE_MS(2000)
 
     HARD_REBOOT_GUMSTIX :  'H
+      UARTS.STR(DEBUG, string(13,"$PSCMD, HARD_REBOOT"))
       PEBBLE.GUMSTIX_OFF
       PAUSE_MS(500)
       PEBBLE.GUMSTIX_ON
 
     PUT_SYSTEM_TO_SLEEP :  'L
-      PEBBLE.GUMSTIX_OFF
-      PAUSE_MS(500)
-      PEBBLE.GUMSTIX_ON
+      UARTS.STR(DEBUG, string(13,"$PSCMD, SLEEP_SYSTEM"))
+      acqMode   := SLEEP           
+      mainState := TURNING_OFF
 
     RATE :                 'R
-      UARTS.STR(DEBUG, string(" Changing sample rate to: "))
+      UARTS.STR(DEBUG, string(13,"$PSCMD, Changing sample rate to: "))
       sampleRate := NUM.FROMSTR(@inUartBuf[inUartPtr[1]],NUM#DDEC) 
       UARTS.DEC(DEBUG, sampleRate)
       UARTS.STR(DEBUG, string(13,"Stopping adcCog: "))
@@ -1261,7 +1282,7 @@ PUB PROCESS_UART | idx, pkpA, pkpB, pkpC, cursor
       START_ACQUISITION
 
     TRIG_INTERVAL :        'I
-      UARTS.STR(DEBUG, string(" Changing triggering interval to: "))
+      UARTS.STR(DEBUG, string(13,"$PSCMD, Changing triggering interval to: "))
       interval := NUM.FROMSTR(@inUartBuf[inUartPtr[1]],NUM#DDEC) 
       UARTS.DEC(DEBUG, interval)
       UARTS.STR(DEBUG, string(13,"Stopping adcCog: "))
@@ -1274,10 +1295,11 @@ PUB PROCESS_UART | idx, pkpA, pkpB, pkpC, cursor
       START_ACQUISITION
 
     QUERY :                ' Q
+      UARTS.STR(DEBUG, string(13,"$PSCMD,QUERY"))
       PRINT_SYSTEM_PARAMETERS
       
     GAIN :                 'G
-      UARTS.STR(DEBUG, string(" Changing gain to: "))
+      UARTS.STR(DEBUG, string(13,"$PSCMD, Changing gain to: "))
       gainA := NUM.FROMSTR(@inUartBuf[inUartPtr[1]],NUM#DDEC) 
       gainB := NUM.FROMSTR(@inUartBuf[inUartPtr[2]],NUM#DDEC) 
       gainC := NUM.FROMSTR(@inUartBuf[inUartPtr[3]],NUM#DDEC) 
@@ -1299,7 +1321,7 @@ PUB PROCESS_UART | idx, pkpA, pkpB, pkpC, cursor
       START_ACQUISITION
 
     SHORT :                'T
-      UARTS.STR(DEBUG, string(" Shorting inputs on channel: "))
+      UARTS.STR(DEBUG, string(13,"$PSCMD, Shorting inputs on channel: "))
       gainA := NUM.FROMSTR(@inUartBuf[inUartPtr[1]],NUM#DDEC) 
       gainB := NUM.FROMSTR(@inUartBuf[inUartPtr[2]],NUM#DDEC) 
       gainC := NUM.FROMSTR(@inUartBuf[inUartPtr[3]],NUM#DDEC) 
@@ -1307,7 +1329,7 @@ PUB PROCESS_UART | idx, pkpA, pkpB, pkpC, cursor
       
       
     SOURCE :               'O                                     
-      UARTS.STR(DEBUG, string(" Changing input source to: "))
+      UARTS.STR(DEBUG, string(13,"$PSCMD, Changing input source to: "))
       sourceA := NUM.FROMSTR(@inUartBuf[inUartPtr[1]],NUM#DDEC) 
       sourceB := NUM.FROMSTR(@inUartBuf[inUartPtr[2]],NUM#DDEC) 
       sourceC := NUM.FROMSTR(@inUartBuf[inUartPtr[3]],NUM#DDEC) 
@@ -1358,7 +1380,7 @@ PUB PROCESS_UART | idx, pkpA, pkpB, pkpC, cursor
       PRINT_EUI
 
     OTHER: 
-      UARTS.STR(DEBUG, string(" Unrecognized command."))
+      UARTS.STR(DEBUG, string(13,"$PSCMD,  Unrecognized command."))
 
 PUB PRINT_EUI 
   bytefill(@euiAddr, 0, 8)
