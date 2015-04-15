@@ -301,12 +301,12 @@ PUB MAIN | bPressed, previousState
       OFF  :                    ' mainState can only be OFF if the acqMode is SLEEP or we are sleeping between triggers
         case acqMode
           SLEEP : 
-            OUTA[RADIO_CS] := 1
+            'OUTA[RADIO_CS] := 1
             if bPressed                      'wake up from sleep and enter continuous mode
               mainState  := TURNING_ON
               acqMode    := CONT
               onDuration := 0
-            OUTA[RADIO_CS] := 0
+            'OUTA[RADIO_CS] := 0
 
 '          CONT : 
 '            if bPressed                      'wake up from sleep and enter continuous mode
@@ -315,8 +315,8 @@ PUB MAIN | bPressed, previousState
 '              onDuration := 0
 
           TRIG  :                            'wake up from sleep because trigger time arrived
-            OUTA[WAKEUP] := 1
-            OUTA[WAKEUP] := 0
+            'OUTA[WAKEUP] := 1
+            'OUTA[WAKEUP] := 0
 
             if ((rtcMinute//interval)==(interval - 1) AND (rtcSecond > 40)) OR bPressed
               mainState  := TURNING_ON
@@ -359,7 +359,9 @@ PUB MAIN | bPressed, previousState
 
 
       ON:                       ' this is where the work gets done; but we can also change states from here
+        outa[wakeup] := 1
         DO_SOMETHING_USEFUL
+        outa[wakeup] := 0
 
         case acqMode
           CONT : 
@@ -824,14 +826,15 @@ PUB DO_SOMETHING_USEFUL | rxByte, response, idx, start
                 uartState := WAITING_FOR_END
               "%"   :
                 inUartBuf[inUartIdx++ <# UART_SIZE] := 0 ' <-- ADD THIS zero terminate string
-                uartState := PROCESS_BUFFER
+                PROCESS_UART
+                uartState := WAITING_FOR_START
               OTHER :
                   inUartBuf[inUartIdx++ <# UART_SIZE] := rxByte     ' if not, keep adding to it
                   uartState := WAITING_FOR_END
   
-       PROCESS_BUFFER     :
-         PROCESS_UART
-         uartState := WAITING_FOR_START
+'       PROCESS_BUFFER     :
+'         PROCESS_UART
+'         uartState := WAITING_FOR_START
       
 
 
@@ -876,7 +879,7 @@ PUB DO_SOMETHING_USEFUL | rxByte, response, idx, start
     %10 : ' falling edge now we can reset phsb since it won't increment until PPS goes high again
       PHSB := 0
 
-  ' if it's time for a MAG/ACC measurement, go get it
+  ' if it's time for a MAG/ACC measurement, go get it getting data from both ACC and Mag takes about 15mS
   if (CNT - magAccTimer) > MAG_ACC_INTERVAL
     if magAccSampleCnt < 15
       magAccTimer := CNT
@@ -890,17 +893,17 @@ PUB DO_SOMETHING_USEFUL | rxByte, response, idx, start
       auxBuffer1[auxIdx++ <# 128] := PEBBLE.GET_MAG_Z
       auxBuffer1[auxIdx++ <# 128] := PEBBLE.READ_MAG_TEMP
       if magAccSampleCnt == 15
-        outa[wakeup]  := 1
         SEND_AUX_PACKET
         UARTS.STR(DEBUG, string(13,"$PSMSG, Sending AUX. "))
-        outa[wakeup]  := 0
     
 
   ' here we process all bytes sitting in the gps buffer -
   ' and we stay in this repeat until the uart buffer is empty OR we've reached the end of the packet
+  outa[radio_cs] := 1
   repeat
     response := UBX.READ_AND_PROCESS_BYTE(FALSE)
   until response == -1 OR response == UBX#RXMRAW
+  outa[radio_cs] := 0
 
   
   if response == UBX#RXMRAW                            ' have we collected all the data in this second?
@@ -1295,7 +1298,7 @@ PUB PROCESS_UART | idx, pkpA, pkpB, pkpC, cursor
       START_ACQUISITION
 
     QUERY :                ' Q
-      UARTS.STR(DEBUG, string(13,"$PSCMD,QUERY"))
+      UARTS.STR(DEBUG, string(13,"$PSCMD, QUERY"))
       PRINT_SYSTEM_PARAMETERS
       
     GAIN :                 'G
@@ -1382,6 +1385,10 @@ PUB PROCESS_UART | idx, pkpA, pkpB, pkpC, cursor
     OTHER: 
       UARTS.STR(DEBUG, string(13,"$PSCMD,  Unrecognized command."))
 
+  UARTS.STR(DEBUG, string("$PSACK, "))
+  UARTS.PUTC(DEBUG, inUartBuf[0])
+  UARTS.PUTC(DEBUG, CR)
+  
 PUB PRINT_EUI 
   bytefill(@euiAddr, 0, 8)
   euiAddr := PEBBLE.READ_EUI + 3' skip the first 3 bytes
