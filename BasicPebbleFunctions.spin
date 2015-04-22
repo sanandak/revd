@@ -44,31 +44,36 @@ CON ' Pin map
   GPS_PPS       =  1
   GPS_RX_FROM   =  2
   GPS_TX_TO     =  3
+
   SPARE         =  4 ' use spare pin as test point
+
   ADC_DRDYOUT   =  5
   ADC_MISO      =  6 ' connected to DOUT on MAX11040K
   ADC_MOSI      =  7 ' connected to DIN  on MAX11040K
   ADC_SCLK      =  8
   ADC_CS        =  9
+
   SRAM_CS       = 10
   SRAM_MOSI     = 11
   SRAM_MISO     = 12
   SRAM_CLK      = 13
+
   WAKEUP        = 14
   REED_SWITCH   = 15
 
-  SLAVE_CLK     = 16 
+  SLAVE_SCLK    = 16 
   SLAVE_SIMO    = 17 
   SLAVE_SOMI    = 18 
   SLAVE_CS      = 19 
   SLAVE_IRQ     = 20 
 
-  SHARED_SCLK   = 21
+  SHARED_CLK    = 21
   SHARED_MOSI   = 22
   SHARED_MISO   = 23
   OLED_CS       = 24
   DAC_CS        = 25
   RADIO_CS      = 26
+
   ONE_WIRE      = 27  
 
   SCL           = 28
@@ -76,7 +81,6 @@ CON ' Pin map
   
   DEBUG_TX_TO   = 30
   DEBUG_RX_FROM = 31
-  
 
 CON ' EEPROM constants
   EEPROM_ADDR   = %1010_0000
@@ -302,75 +306,7 @@ PUB INIT : response
   DIRA[SRAM_CLK]    := 0
 
 
-{PUB SLEEP_ALL_BUT_GPS
-' this differes from SET_EXPANDER_TO_LOW_POWER because this does not turn off the GUMSTIX
-' use ONLY when sleeping the gumstix AFTER a SHUTDOWN command
-' put the 2 expanders (and the LEDs they contain) into a know and low-power state
-' EXP_1 : PGA_D_CS | PGA_C_CS | PGA_B_CS | PGA_A_CS | MUX2SEL_3-4 | MUX2SEL_1-2 | MUX1SEL_3-4 | MUX1SEL_1-2
-  expVal1 := PGA_D_CS | PGA_C_CS | PGA_B_CS | PGA_A_CS | %0000
 
-' EXP_2 : GPS_RESET | MAG_ACC_EN | OLED_EN | UBLOX_EN | GUMSTIX_EN | 5V_ENABLE | LED1003 | LED1002     
-  expVal2 := %1001_1011  ' LEAVE GPS on AND GPS RESET high; leave gumstix enabled; turn OFF everything else; LEDS OFF (high)
-
-  EXPANDER_WRITE(EXPANDER_1, expVal1)
-  EXPANDER_WRITE(EXPANDER_2, expVal2)
-
-' we don't use the SRAM so make sure it's not selected
-  DIRA[SRAM_CS]  := 1           ' hold SRAM in RESET
-  OUTA[SRAM_CS]  := 1           ' hold SRAM in RESET
-
-' setup the shared SPI
-  'DIRA[RADIO_CS] := 1
-  DIRA[OLED_CS]  := 1
-  DIRA[DAC_CS]   := 1
-  
-  'OUTA[RADIO_CS] := 1
-  OUTA[OLED_CS]  := 0           ' current appears to leak from this device.  Since it's powered off don't worry about CS lineS
-  OUTA[DAC_CS]   := 1
-
-  DIRA[SHARED_MOSI] := 1
-  OUTA[SHARED_MOSI] := 0
-
-  DIRA[SHARED_MISO] := 0
-  
-  DIRA[SHARED_SCLK] := 1
-  OUTA[SHARED_SCLK] := 0
-}
-
-{PUB SET_EXPANDER_TO_SLEEP
-' this differes from SET_EXPANDER_TO_LOW_POWER because this does not turn off the GUMSTIX
-' use ONLY when sleeping the gumstix AFTER a SHUTDOWN command
-' put the 2 expanders (and the LEDs they contain) into a know and low-power state
-' EXP_1 : PGA_D_CS | PGA_C_CS | PGA_B_CS | PGA_A_CS | MUX2SEL_3-4 | MUX2SEL_1-2 | MUX1SEL_3-4 | MUX1SEL_1-2
-  expVal1 := PGA_D_CS | PGA_C_CS | PGA_B_CS | PGA_A_CS | %0000
-
-' EXP_2 : GPS_RESET | MAG_ACC_EN | OLED_EN | UBLOX_EN | GUMSTIX_EN | 5V_ENABLE | LED1003 | LED1002     
-  expVal2 := %00001011  ' turn components OFF and turn LEDS OFF (high)
-
-  EXPANDER_WRITE(EXPANDER_1, expVal1)
-  EXPANDER_WRITE(EXPANDER_2, expVal2)
-
-' we don't use the SRAM so make sure it's not selected
-  DIRA[SRAM_CS]  := 1           ' hold SRAM in RESET
-  OUTA[SRAM_CS]  := 1           ' hold SRAM in RESET
-
-' setup the shared SPI
-  'DIRA[RADIO_CS] := 1
-  DIRA[OLED_CS]  := 1
-  DIRA[DAC_CS]   := 1
-  
-  'OUTA[RADIO_CS] := 1
-  OUTA[OLED_CS]  := 0           ' current appears to leak from this device.  Since it's powered off don't worry about CS lineS
-  OUTA[DAC_CS]   := 1
-
-  DIRA[SHARED_MOSI] := 1
-  OUTA[SHARED_MOSI] := 0
-
-  DIRA[SHARED_MISO] := 0
-  
-  DIRA[SHARED_SCLK] := 1
-  OUTA[SHARED_SCLK] := 0
-}
 PUB SET_EXPANDER_TO_LOW_POWER : response 
 ' put the 2 expanders (and the LEDs they contain) into a know and low-power state
 ' EXP_1 : PGA_D_CS | PGA_C_CS | PGA_B_CS | PGA_A_CS | MUX2SEL_3-4 | MUX2SEL_1-2 | MUX1SEL_3-4 | MUX1SEL_1-2
@@ -378,52 +314,69 @@ PUB SET_EXPANDER_TO_LOW_POWER : response
   EXPANDER_WRITE(EXPANDER_1, expVal1)
 
 ' EXP_2 : GPS_RESET | MAG_ACC_EN | OLED_EN | UBLOX_EN | GUMSTIX_EN | 5V_ENABLE | LED1003 | LED1002     
-  expVal2 := %00000011  ' turn components OFF and turn LEDS OFF (high)
+  expVal2 := %00000111  ' turn components OFF and turn LEDS OFF (high)
+  EXPANDER_WRITE(EXPANDER_2, expVal2)
 
-  MAG_ACC_OFF
-  GPS_OFF
-  OLED_OFF
-  GUMSTIX_OFF
+'  MAG_ACC_OFF
+'  GPS_OFF
+'  OLED_OFF
+'  GUMSTIX_OFF
+
+  ' now let's lower shutdown the ADC by setting shutdown bit (7) high
+  response := SHUTDOWN_ADC
+
+  DIRA[ADC_DRDYOUT] := 0
+  DIRA[ADC_MISO]    := 0
+  DIRA[ADC_MOSI]    := 0
+  DIRA[ADC_SCLK]    := 0
+  DIRA[ADC_CS]      := 0
+  
   ANALOG_OFF
 
 ' gumstix is off so pull set spare pin to input
   DIRA[SPARE]       := 1
-  OUTA[SPARE]       := 0        ' pull this low
-' analog and ADC stuff is turned off; make sure those are set to inputs
-  SHUTDOWN_ADC
+  OUTA[SPARE]       := 1        ' pull this high
+
 ' SRAM is powered but not used; hold it in reset with CS high
   DIRA[SRAM_CS]     := 1        ' hold SRAM in RESET
   OUTA[SRAM_CS]     := 1        ' hold SRAM in RESET
   DIRA[SRAM_MOSI]   := 0
   DIRA[SRAM_MISO]   := 0
   DIRA[SRAM_CLK]    := 0
+
 ' controller bus isn't used when sleeping; make all these lines inputs
-  DIRA[SLAVE_CLK]   := 0
+  DIRA[SLAVE_SCLK]   := 0
   DIRA[SLAVE_SIMO]  := 0
   DIRA[SLAVE_SOMI]  := 0
   DIRA[SLAVE_CS]    := 0
   DIRA[SLAVE_IRQ]   := 0
+
 ' shared lines are not used when sleeping; set them to inputs  
-  DIRA[SHARED_SCLK] := 0        ' set as input
+  DIRA[SHARED_CLK]  := 0        ' set as input
   DIRA[SHARED_MOSI] := 0        ' set as input
   DIRA[SHARED_MISO] := 0        ' set as input
+
 ' oled is not powered so make OLED_CS an input
   DIRA[OLED_CS]     := 0        ' set as input
+
 ' DAC is still powered so make sure we hold this line high
   DIRA[DAC_CS]      := 1        ' set as out
   OUTA[DAC_CS]      := 1        ' hold line high
+
 ' RADIO is still powered so make sure we hold this line high
   DIRA[RADIO_CS]    := 1        ' set as out
   OUTA[RADIO_CS]    := 1        ' hold line high
+
 ' ONE_WIRE temp sensor is not being used at the moment so pull it up to avoid burning current through R1102
   DIRA[ONE_WIRE]    := 1  
   OUTA[ONE_WIRE]    := 1  
+
 ' I2C lines should be pulled high in this cog
   DIRA[SCL]         := 1
   OUTA[SCL]         := 1
   DIRA[SDA]         := 1
   OUTA[SDA]         := 1
-  
+                                          
 
 PUB LEDS_ON
 ' turn the LEDS on the I2C expander ON by setting the bits LOW
@@ -536,8 +489,8 @@ PUB OLED_ON
 
   DIRA[SHARED_MISO] := 0
   
-  DIRA[SHARED_SCLK] := 1
-  OUTA[SHARED_SCLK] := 0       
+  DIRA[SHARED_CLK] := 1
+  OUTA[SHARED_CLK] := 0       
 
   ' setup the OLED_CS pin as an output and high
   DIRA[OLED_CS]  := 1
@@ -594,57 +547,57 @@ PUB SHIFT_OUT_TO_OLED(dataOut)
 '// 10 bits of data must be clocked into the display.
 
   dataOut ><= 10             ' reverse the lowest 10 bits
-  OUTA[SHARED_SCLK] := 0                         ' drop clock
+  OUTA[SHARED_CLK] := 0                         ' drop clock
   OUTA[SHARED_MOSI] := (dataOut & %01)           ' place next bit on MOSI
   dataOut >>= 1
-  OUTA[SHARED_SCLK] := 1                         ' raise clock
+  OUTA[SHARED_CLK] := 1                         ' raise clock
 
-  OUTA[SHARED_SCLK] := 0                         ' drop clock
+  OUTA[SHARED_CLK] := 0                         ' drop clock
   OUTA[SHARED_MOSI] := (dataOut & %01)           ' place next bit on MOSI
   dataOut >>= 1
-  OUTA[SHARED_SCLK] := 1                         ' raise clock
+  OUTA[SHARED_CLK] := 1                         ' raise clock
 
-  OUTA[SHARED_SCLK] := 0                         ' drop clock
+  OUTA[SHARED_CLK] := 0                         ' drop clock
   OUTA[SHARED_MOSI] := (dataOut & %01)           ' place next bit on MOSI
   dataOut >>= 1
-  OUTA[SHARED_SCLK] := 1                         ' raise clock
+  OUTA[SHARED_CLK] := 1                         ' raise clock
 
-  OUTA[SHARED_SCLK] := 0                         ' drop clock
+  OUTA[SHARED_CLK] := 0                         ' drop clock
   OUTA[SHARED_MOSI] := (dataOut & %01)           ' place next bit on MOSI
   dataOut >>= 1
-  OUTA[SHARED_SCLK] := 1                         ' raise clock
+  OUTA[SHARED_CLK] := 1                         ' raise clock
 
-  OUTA[SHARED_SCLK] := 0                         ' drop clock
+  OUTA[SHARED_CLK] := 0                         ' drop clock
   OUTA[SHARED_MOSI] := (dataOut & %01)           ' place next bit on MOSI
   dataOut >>= 1
-  OUTA[SHARED_SCLK] := 1                         ' raise clock
+  OUTA[SHARED_CLK] := 1                         ' raise clock
 
-  OUTA[SHARED_SCLK] := 0                         ' drop clock
+  OUTA[SHARED_CLK] := 0                         ' drop clock
   OUTA[SHARED_MOSI] := (dataOut & %01)           ' place next bit on MOSI
   dataOut >>= 1
-  OUTA[SHARED_SCLK] := 1                         ' raise clock
+  OUTA[SHARED_CLK] := 1                         ' raise clock
 
-  OUTA[SHARED_SCLK] := 0                         ' drop clock
+  OUTA[SHARED_CLK] := 0                         ' drop clock
   OUTA[SHARED_MOSI] := (dataOut & %01)           ' place next bit on MOSI
   dataOut >>= 1
-  OUTA[SHARED_SCLK] := 1                         ' raise clock
+  OUTA[SHARED_CLK] := 1                         ' raise clock
 
-  OUTA[SHARED_SCLK] := 0                         ' drop clock
+  OUTA[SHARED_CLK] := 0                         ' drop clock
   OUTA[SHARED_MOSI] := (dataOut & %01)           ' place next bit on MOSI
   dataOut >>= 1
-  OUTA[SHARED_SCLK] := 1                         ' raise clock
+  OUTA[SHARED_CLK] := 1                         ' raise clock
 
-  OUTA[SHARED_SCLK] := 0                         ' drop clock
+  OUTA[SHARED_CLK] := 0                         ' drop clock
   OUTA[SHARED_MOSI] := (dataOut & %01)           ' place next bit on MOSI
   dataOut >>= 1
-  OUTA[SHARED_SCLK] := 1                         ' raise clock
+  OUTA[SHARED_CLK] := 1                         ' raise clock
 
-  OUTA[SHARED_SCLK] := 0                         ' drop clock
+  OUTA[SHARED_CLK] := 0                         ' drop clock
   OUTA[SHARED_MOSI] := (dataOut & %01)           ' place next bit on MOSI
   dataOut >>= 1
-  OUTA[SHARED_SCLK] := 1                         ' raise clock
+  OUTA[SHARED_CLK] := 1                         ' raise clock
 
-  OUTA[SHARED_SCLK] := 0                         ' leave clock low on exit
+  OUTA[SHARED_CLK] := 0                         ' leave clock low on exit
   OUTA[SHARED_MOSI] := 0                         ' leave MOSI low on exit
 
 PUB OLED_WRITE_LINE1(stringPtr)
@@ -682,7 +635,7 @@ PUB EXPANDER_WRITE(deviceAddress, expanderValue)
   I2C.STOP
   return MY_TRUE
 
-PRI SHUTDOWN_ADC | dataOut
+{PRI SHUTDOWN_ADC | dataOut
 ' ADC can be shutdown via software.  Clock shutdown command to ADC
 '          call    #LOWER_CS                             ' lower CS line
 '          mov     data,         #WCR                    ' put the address into outLong
@@ -725,7 +678,7 @@ PRI SHUTDOWN_ADC | dataOut
   DIRA[ADC_SCLK]    := 0    
   DIRA[ADC_CS]      := 1        ' this device is still powered so hold in reset    
   OUTA[ADC_CS]      := 1        ' hold CS high for reset    
-
+}
 
 PUB READ_EUI 
   I2C.START
@@ -842,13 +795,13 @@ PUB WRITE_TO_DAC(newDacValue)| dacCode
 
   OUTA[DAC_CS]  := 0                                    ' lower CS line
   repeat 24
-    OUTA[SHARED_SCLK] := 0                                    ' drop clock
+    OUTA[SHARED_CLK] := 0                                    ' drop clock
     OUTA[SHARED_MOSI] := (dacCode & %01)                      ' place next bit on MOSI
     dacCode >>= 1                                            ' shift right by one
-    OUTA[SHARED_SCLK] := 1                                    ' raise clock
+    OUTA[SHARED_CLK] := 1                                    ' raise clock
          
   OUTA[SHARED_MOSI] := 0
-  OUTA[SHARED_SCLK] := 0
+  OUTA[SHARED_CLK] := 0
 
   OUTA[DAC_CS]  := 1                                    ' raise CS line
 
@@ -1084,14 +1037,83 @@ PUB GAIN_BINARY_VAL(gain) | response
 
   return response
 
+PUB SHUTDOWN_ADC : response
+' method that clocks out (in spin) the commands necessary to shutdown the adc
+  ' Setup pins
+  OUTA[ADC_CS]   := 1
+  DIRA[ADC_CS]   := 1
+
+  OUTA[ADC_SCLK] := 1
+  DIRA[ADC_SCLK] := 1
+  
+  OUTA[ADC_MOSI] := 0
+  DIRA[ADC_MOSI] := 1
+                           
+  WRITE_OPERATION(%0110_0000, %1_0_0_0_0_1_00, 1)        ' hold shutdown bit high indicating shutdown
+  'WRITE_OPERATION(%0110_0000, %0_1_0_0_0_1_00, 1)
+  'WRITE_OPERATION(%0110_0000, %0_0_1_0_0_1_00, 1)
+  response := READ_REGISTER(%1110_0000, 1)
+
+  OUTA[ADC_DRDYOUT] := 0
+  DIRA[ADC_DRDYOUT] := 1
+  OUTA[ADC_MISO]    := 0
+  DIRA[ADC_MISO]    := 1
+  OUTA[ADC_MOSI]    := 0
+  DIRA[ADC_MOSI]    := 1
+  OUTA[ADC_SCLK]    := 0
+  DIRA[ADC_SCLK]    := 1
+  OUTA[ADC_CS]      := 0
+  DIRA[ADC_CS]      := 1
+
+PUB WRITE_OPERATION(address, data, bytesToWrite)
+  OUTA[ADC_CS] := 0     ' lower ADC_CS line
+
+  WRITE_COMMAND(address)
+  WRITE_DATA(data, bytesToWrite) 
+   
+  OUTA[ADC_CS] := 1     ' raise ADC_CS line
+   
+PUB WRITE_COMMAND(address)
+  WRITE_DATA(address, 1)
+ 
+PUB WRITE_DATA(data, count) | outData, bits
+  case count
+    1 : bits    := 8
+        outData := data >< bits   ' reverse order of lowest 8 bits
+    2 : bits    := 16
+        outData := data >< bits   ' reverse order of lowest 16 bits
+    4 : bits    := 32
+        outData := data >< bits   ' reverse order of all 32 bits
+        
+
+  '  all bits have been reversed so now we can shift them out by shifting to the right.  
+  repeat bits     ' how many bits are we sending?
+    OUTA[ADC_SCLK] := 1                      ' raise clock
+    OUTA[ADC_MOSI] := outData & %0000_0001   ' output bit
+    OUTA[ADC_SCLK] := 0                      ' lower clock
+    outdata >>= 1
+
+PUB READ_REGISTER(address, count) | inData
+  inData := 0
+  OUTA[ADC_CS] := 0     ' lower ADC_CS line
+  WRITE_COMMAND(address)
+
+  repeat count*8  ' we need 8 bits for each byte
+    OUTA[ADC_SCLK] := 1
+    inData := (inData << 1) + INA[ADC_MISO]
+    OUTA[ADC_SCLK] := 0
+    
+  OUTA[ADC_CS] := 1    ' raise ADC_CS line
+  return inData
+
 PRI WRITE_PGA(ch, pgaData) | tmp
 ' ch should be %0001-%1000, pgaData should be data to be clocked out to PGA
 ' writing to the PGA is pretty simple.  It's always 8 bits CPOL=CPHA=0; LSB first
 ' see page 8 of the data sheet
 
-  OUTA[SHARED_SCLK] := 0        ' set clock low
+  OUTA[SHARED_CLK] := 0        ' set clock low
   OUTA[SHARED_MOSI] := 0        ' set MOSI low
-  DIRA[SHARED_SCLK] := 1        ' set clock to output
+  DIRA[SHARED_CLK] := 1        ' set clock to output
   DIRA[SHARED_MOSI] := 1        ' set MOSI to output
 
   ' lower appropriate CS line
@@ -1100,9 +1122,9 @@ PRI WRITE_PGA(ch, pgaData) | tmp
   
   repeat 8     ' how many bits are we sending?
     OUTA[SHARED_MOSI] := pgaData & %0000_0001   ' output bit (send LSB first)
-    OUTA[SHARED_SCLK] := 1                      ' raise clock  
+    OUTA[SHARED_CLK] := 1                      ' raise clock  
     pgadata >>= 1
-    OUTA[SHARED_SCLK] := 0                      ' lower clock  
+    OUTA[SHARED_CLK] := 0                      ' lower clock  
   OUTA[SHARED_MOSI] := 0 ' lower MOSI at end
 
   ' raise the CS line to latch the command

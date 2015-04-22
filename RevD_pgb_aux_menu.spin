@@ -31,16 +31,20 @@ CON ' Pin map
   GPS_PPS       =  1
   GPS_RX_FROM   =  2
   GPS_TX_TO     =  3
+
   SPARE         =  4 ' use spare pin as test point
+
   ADC_DRDYOUT   =  5
   ADC_MISO      =  6 ' connected to DOUT on MAX11040K
   ADC_MOSI      =  7 ' connected to DIN  on MAX11040K
   ADC_SCLK      =  8
   ADC_CS        =  9
+
   SRAM_CS       = 10
   SRAM_MOSI     = 11
   SRAM_MISO     = 12
   SRAM_CLK      = 13
+
   WAKEUP        = 14
   REED_SWITCH   = 15
 
@@ -56,6 +60,7 @@ CON ' Pin map
   OLED_CS       = 24
   DAC_CS        = 25
   RADIO_CS      = 26
+
   ONE_WIRE      = 27  
 
   SCL           = 28
@@ -193,6 +198,12 @@ CON ' main state machine states; some are also used as acqState states
 CON ' button states
   #0, WAITING_FOR_PRESS, WAITING_FOR_RELEASE, BUTTON_HOLDOFF   ' these are the button press/menu states
 
+CON ' gpsdo states
+  #0, DISCPLING, WAITING_FOR_MEASUREMENT
+
+CON ' recTypeEnum
+  #0, CONTINUOUS, TRIGGERED, TIMED, THRESHOLD, RADIO
+    
 CON ' menu states'
   #0, MENU_NONE, MENU_PROMPT_TRIG, MENU_PROMPT_CONT, MENU_PROMPT_OFF, MENU_CONFIRM, MENU_INFORM
   #0, PEBBLE_TRIG, PEBBLE_CONT, PEBBLE_SHUT ' possible requested states'
@@ -203,7 +214,7 @@ CON ' timeout constants
   SHUTDOWN_TIMEOUT_MS  =   10_000
   MENU_TIMEOUT_MS      =     4000       ' stay in a menu for this time before timing out'
   BOOT_TIMEOUT_MS      =     5000
-  UART_TIMEOUT_MS      =      250
+  UART_TIMEOUT_MS      =       25
   
   MAG_ACC_INTERVAL     =  MAG_ACC_TIMER_MS    * ONE_MS
   SHUTDOWN_TIMEOUT     =  SHUTDOWN_TIMEOUT_MS * ONE_MS
@@ -228,6 +239,8 @@ OBJ
 VAR
   byte mainCogId, serialCogId, adcCogId, slaveCogId, watchDogCogId
   byte mainState, acqMode, buttonState
+  byte gpsdoState, gpsdoCnt
+  byte recTypeEnum
   byte menuState, requestedState
   byte oledOn, onDuration, led1on, led2On
   byte lockType, recordComplete
@@ -242,6 +255,8 @@ VAR
   word rtcYear, rtcMonth, rtcDay, rtcDow, rtcHour, rtcMinute, rtcSecond
   word year, month, day, hour, minute, second, utcValid, gpsValid, fixStat
           
+  long msgStart
+  long edges
   long rtcYMD, rtcHMS
   long pressTime, releaseTime, onTime
   long menuPressTime, led2Time ' time when the menu button was pressed - use for timeout'
@@ -292,46 +307,40 @@ PUB MAIN | bPressed, previousState
   mainState := TURNING_ON       ' mainState is NOT stored in SRAM
   acqMode   := BOOT             ' this indicates first boot
 
+
+  DIRA[SRAM_MOSI] := 1
+  OUTA[SRAM_MOSI] := 0
+
+  dira[SRAM_MISO] := 1
+  outa[SRAM_MISO] := 0
+
   repeat
     PET_WATCHDOG                ' do this every time through the loop.
-
     bPressed := BUTTON_PRESSED  ' check for button press
 
     case mainState
       OFF  :                    ' mainState can only be OFF if the acqMode is SLEEP or we are sleeping between triggers
         case acqMode
           SLEEP : 
-            'OUTA[RADIO_CS] := 1
             if bPressed                      'wake up from sleep and enter continuous mode
               mainState  := TURNING_ON
               acqMode    := CONT
-              onDuration := 0
-            'OUTA[RADIO_CS] := 0
-
-'          CONT : 
-'            if bPressed                      'wake up from sleep and enter continuous mode
-'              mainState  := TURNING_ON
-'              acqMode    := CONT
-'              onDuration := 0
 
           TRIG  :                            'wake up from sleep because trigger time arrived
-            'OUTA[WAKEUP] := 1
-            'OUTA[WAKEUP] := 0
-
             if ((rtcMinute//interval)==(interval - 1) AND (rtcSecond > 40)) OR bPressed
               mainState  := TURNING_ON
               acqMode    := TRIG
               if bPressed
-                onDuration := 0
                 recordComplete := FALSE
               else
-                onDuration := 30 - 10 ' normally this is set to 30 seconds, but with no button press it should only be 10 seconds
+                onDuration := 30 - 10 ' normally this is set to 30 seconds, but
+                                      ' with no button press it should only be shorter
               
             if (CNT - lastRTCcheck) > (clkfreq<<1)   ' avoid checking the RTC too often; how about every 2 seconds
-                PEBBLE.LED2_ON                       ' blink LED to indicate TRIG mode
-                READ_RTC
-                lastRTCcheck := CNT
-                PEBBLE.LED2_OFF
+              PEBBLE.LED2_ON                         ' blink LED to indicate TRIG mode
+              READ_RTC
+              lastRTCcheck := CNT
+              PEBBLE.LED2_OFF
 
 
       TURNING_ON :              ' always pass through this state on the way to ON; gives an opportunity to print current acqMode
@@ -359,25 +368,21 @@ PUB MAIN | bPressed, previousState
 
 
       ON:                       ' this is where the work gets done; but we can also change states from here
-        outa[wakeup] := 1
         DO_SOMETHING_USEFUL
-        outa[wakeup] := 0
-
         case acqMode
-          CONT : 
-            if bPressed
-              onDuration := 0
-
-            if oledOn == FALSE AND bPressed
-              UARTS.STR(DEBUG, string(13,"Turning OLED ON"))
+          CONT :
+            recTypeEnum := CONTINUOUS
+            if oledOn == 0 AND bPressed
+              UARTS.STR(DEBUG, string(13,"$PSMSG, Turning OLED ON"))
               PEBBLE.OLED_ON                
-              oledOn := TRUE
-              onDuration := 0
+              oledOn := 1
+              DISPLAY_ON_OLED(1,string(" OLED on       "))
             else 
               MENU_SYSTEM(bPressed)
-              if oledON == TRUE AND onDuration > 30    ' is it time to turn off the OLED?
-                oledOn := FALSE
+              if oledOn == 1 AND onDuration > 30    ' is it time to turn off the OLED?
+                UARTS.STR(DEBUG, string(13,"$PSMSG, Turning OLED OFF"))
                 PEBBLE.OLED_OFF
+                oledOn := 0
 
             if (CNT - led2Time) > FULL_SPEED    ' toggle the LED slowly
               led2Time := CNT
@@ -388,7 +393,8 @@ PUB MAIN | bPressed, previousState
                 PEBBLE.LED2_ON
                 led2On := TRUE
         
-          TRIG :     
+          TRIG :
+            recTypeEnum := TRIGGERED
             MENU_SYSTEM(bPressed)
 
             if recordComplete == FALSE ' have we completed this record?  If so, turn off  
@@ -431,6 +437,18 @@ PUB WAKE_SYSTEM(newAcqMode) | displayTime
     CLOCK.SetMode(CLOCK#XTAL1_PLL16x)  ' set clock to 100Mhz
     START_WATCHDOG          ' we need to start the watch dog with the new clockspeed
 
+  ' make sure we start with a clean slate every time
+  magAccSampleCnt := 0
+  gpsdoCnt        := 0
+  longfill(@auxBuffer1, 0 , 128)
+  longfill(@auxBuffer2, 0 , 128)
+  auxDataToWrite := MY_FALSE         ' remember FALSE = 0
+  gpsDataToWrite := MY_FALSE         ' remember FALSE = 0
+  longfill(@gpsBuffer, 0 , 256)
+  longfill(@slaveBuffer, 0, LONGS_IN_SLAVE_BUFFER)       
+
+
+
   'PEBBLE.LED1_OFF               ' turn OFF LED1 
   PEBBLE.LED2_ON                ' turn ON  LED2  indicating we are acquiring data
   led2Time := CNT
@@ -439,7 +457,7 @@ PUB WAKE_SYSTEM(newAcqMode) | displayTime
   PEBBLE.OLED_ON                ' turn on and init oled
   PEBBLE.GPS_ON
 
-  oledOn := TRUE
+  oledOn := 1
   DISPLAY_ON_OLED(1,string(" Waking System "))
 
   LAUNCH_SERIAL_COG             ' handle the 2 serial ports- debug and GPS
@@ -482,11 +500,16 @@ PUB WAKE_SYSTEM(newAcqMode) | displayTime
 ' setup counter B in this cog to track the number of system counts between
 ' the rising GPS and when we get over to read it.
 ' this frees us from having a cog dedicated to just watching the gpspps
-
   CTRB[30..26] := %01000                                ' ctrb module to POS detector;                                                        
   CTRB[5..0]   := GPS_PPS                               ' add frqb to phsb every clock cycle that GPS_PPS high
   FRQB := 1                                             ' this will keep track of the number of system counts
   PHSB~                                                 ' from the rising edge of GPS
+
+' setup PHSA to watch the 20Mhz external oscillator
+  CTRA[30..26] := %01010                                ' ctrb module to POS detector;                                                        
+  CTRA[5..0]   := EXT_OSC          ' counter A in POSedge mode   
+  FRQA := 1                        ' increment once per pulse
+  PHSA~                            ' clear PHSA to start
 
   GET_GPS_LOCK
 
@@ -553,8 +576,11 @@ PUB TURN_SYSTEM_OFF | i
     PAUSE_MS(100)
   until {INA[SPARE] == 1 OR} (CNT - i) > SHUTDOWN_TIMEOUT
 
-  PEBBLE.SET_EXPANDER_TO_LOW_POWER
-  oledOn := FALSE
+  i := PEBBLE.SET_EXPANDER_TO_LOW_POWER
+  UARTS.STR(DEBUG, string(13, "SHUTDOWN: 0b"))
+  UARTS.BIN(DEBUG, i, 8)
+
+  oledOn := 0
 
   repeat i from 0 to 7
     if i <> mainCogId  AND i <> watchDogCogId
@@ -673,7 +699,6 @@ PUB BUTTON_PRESSED  : buttonPressed
           buttonState   := BUTTON_HOLDOFF
           buttonPressed := TRUE
           onDuration    := 0
-          displayDark   := CNT
       
       if INA[REED_SWITCH] == NOT_PRESSED
         if (CNT-pressTime) > clkfreq>>1      ' pressed for more than a second      
@@ -795,7 +820,7 @@ PUB GET_AND_PRINT_PARAMETERS
   GET_PARAMETERS_FROM_SRAM
   PRINT_SYSTEM_PARAMETERS                                                     
 
-PUB DO_SOMETHING_USEFUL | rxByte, response, idx, start
+PUB DO_SOMETHING_USEFUL | rxByte, response
 ' put things here that need to be done but have some timing flexibility
 ' all of this happens in the top level cog
 
@@ -806,48 +831,71 @@ PUB DO_SOMETHING_USEFUL | rxByte, response, idx, start
      case uartState
         WAITING_FOR_START :
           if rxByte == "$"                     ' beginning of a new string
-            start     := CNT
+            msgStart  := CNT
+            outa[radio_cs] := 1
             inUartIdx := 0
             ptrIdx    := 0
-            bytefill(@inUartIdx, 0, UART_SIZE) ' buffer for all incoming bytes
+            bytefill(@inUartBuf, 0, UART_SIZE) ' buffer for all incoming bytes
             bytefill(@inUartPtr, 0, MAX_COMMANDS) ' contains the index of each field 
             uartState := WAITING_FOR_END
   
         WAITING_FOR_END   :
-          if (CNT - start > UART_TIMEOUT)
-            UARTS.STR(DEBUG, string(13, "$PSMSG, UART timeout."))
+          if (CNT - msgStart) > UART_TIMEOUT
+            UARTS.STR(DEBUG, string(13, "$PSMSG, TO"))
             uartState := WAITING_FOR_START
           
-          if rxByte <> -1
-            case rxByte
-              ","    :
-                inUartBuf[inUartIdx++ <# UART_SIZE] := 0          ' zero terminate strings
-                inUartPtr[++ptrIdx] := inUartIdx <# MAX_COMMANDS
-                uartState := WAITING_FOR_END
-              "%"   :
-                inUartBuf[inUartIdx++ <# UART_SIZE] := 0 ' <-- ADD THIS zero terminate string
-                PROCESS_UART
-                uartState := WAITING_FOR_START
-              OTHER :
-                  inUartBuf[inUartIdx++ <# UART_SIZE] := rxByte     ' if not, keep adding to it
-                  uartState := WAITING_FOR_END
+          case rxByte
+            "$"    :  ' shouldn't get this in the middle of a string so start over
+              uartState := WAITING_FOR_START 
+            ","    :  
+              inUartBuf[inUartIdx++ <# UART_SIZE] := 0          ' replace , with zero
+              inUartPtr[++ptrIdx] := inUartIdx <# MAX_COMMANDS
+              uartState := WAITING_FOR_END
+            "%"   :
+              outa[radio_cs] := 0
+              inUartBuf[inUartIdx++ <# UART_SIZE] := 0          ' zero terminate entire string
+              PROCESS_UART
+              uartState := WAITING_FOR_START
+            OTHER :
+              inUartBuf[inUartIdx++ <# UART_SIZE] := rxByte     ' if not, keep adding to it
+              uartState := WAITING_FOR_END
   
-'       PROCESS_BUFFER     :
-'         PROCESS_UART
-'         uartState := WAITING_FOR_START
-      
 
 
   edgeDetector := ((edgeDetector << 1) | INA[GPS_PPS] ) & %11    
   case edgeDetector 
     %01 : ' rising edge -> grab phsb
+      outa[SRAM_MOSI] := 1
       cntsTemp := CNT - PHSB
+      'if gpsdoCnt == 15
+        edges := PHSA
+        PHSA  := 0
+        'gpsdoCnt := 0
+      outa[SRAM_MOSI] := 0
+      
+      'gpsdoCnt++
       onDuration++
+
       UPDATE_TIME_AND_DATE                   ' KEEP IN MIND WE ALWAYS UPDATE TIME/DATE ON THE PPS following OUR MESSAGE SO WE ARE BEHIND ONE SECOND
-      UARTS.STR(DEBUG, string(13, "$PSMSG, menuState:      "))
+
+      if auxDataToWrite == MY_FALSE  ' if shared AUX buffer is empty, send what we've got.
+        SEND_AUX_PACKET
+        
+      UARTS.STR(DEBUG, string(13, "$PSMSG, menu: "))
       UARTS.DEC(DEBUG, menuState)
-      UARTS.STR(DEBUG, string(" onDuration: "))
+      UARTS.STR(DEBUG, string(" main: "))
+      UARTS.DEC(DEBUG, mainState)
+      UARTS.STR(DEBUG, string(" acq: "))
+      UARTS.DEC(DEBUG, acqMode)
+      UARTS.STR(DEBUG, string(" onTime: "))
       UARTS.DEC(DEBUG, onDuration)
+      if oledOn == 1
+        UARTS.STR(DEBUG, string(" on"))
+      else
+        UARTS.STR(DEBUG, string(" off"))
+      UARTS.STR(DEBUG, string(" maCnt: "))
+      UARTS.DEC(DEBUG, magAccSampleCnt)
+
       case menuState
         MENU_NONE        :
           PRINT_TIME_AND_DATE(FALSE)
@@ -879,9 +927,10 @@ PUB DO_SOMETHING_USEFUL | rxByte, response, idx, start
     %10 : ' falling edge now we can reset phsb since it won't increment until PPS goes high again
       PHSB := 0
 
-  ' if it's time for a MAG/ACC measurement, go get it getting data from both ACC and Mag takes about 15mS
+
   if (CNT - magAccTimer) > MAG_ACC_INTERVAL
-    if magAccSampleCnt < 15
+    if magAccSampleCnt < 10     ' be sure not to overfill the buffer
+      outa[SRAM_MISO] := 1
       magAccTimer := CNT
       magAccSampleCnt++
       auxBuffer1[auxIdx++ <# 128] := PEBBLE.GET_ACC_X
@@ -892,18 +941,16 @@ PUB DO_SOMETHING_USEFUL | rxByte, response, idx, start
       auxBuffer1[auxIdx++ <# 128] := PEBBLE.GET_MAG_Y
       auxBuffer1[auxIdx++ <# 128] := PEBBLE.GET_MAG_Z
       auxBuffer1[auxIdx++ <# 128] := PEBBLE.READ_MAG_TEMP
-      if magAccSampleCnt == 15
-        SEND_AUX_PACKET
-        UARTS.STR(DEBUG, string(13,"$PSMSG, Sending AUX. "))
+      outa[SRAM_MISO] := 0
     
 
   ' here we process all bytes sitting in the gps buffer -
   ' and we stay in this repeat until the uart buffer is empty OR we've reached the end of the packet
-  outa[radio_cs] := 1
+  outa[wakeup] := 1
   repeat
     response := UBX.READ_AND_PROCESS_BYTE(FALSE)
   until response == -1 OR response == UBX#RXMRAW
-  outa[radio_cs] := 0
+  outa[wakeup] := 0
 
   
   if response == UBX#RXMRAW                            ' have we collected all the data in this second?
@@ -926,14 +973,15 @@ PUB DO_SOMETHING_USEFUL | rxByte, response, idx, start
     UBX.CLEAR_UBX_BUFFER                                ' clear the pointer on that side so it can process next second
     gpsDataToWrite := MY_TRUE                           ' let the other cogs know there are gps data to write
 
-PUB SEND_AUX_PACKET | idx, wakeUpMode, recTypeEnum, timeOfDayOn, timeOfDaySleep, radioOnDuration
+PUB SEND_AUX_PACKET | idx, wakeUpMode, timeOfDayOn, timeOfDaySleep, radioOnDuration
 ' copy the aux data from aux1 to aux2
 ' signal the SPI cog that we've got aux data to send
 ' wipe out the buffer so it's ready for next time
 
-  if auxDataToWrite == MY_TRUE  ' haven't emptied old buffer - return.
-    return
+  outa[SRAM_MISO] := 1
   
+  UARTS.STR(DEBUG, string(13,"$PSMSG, Sending AUX. "))
+
   longmove(@auxBuffer2 , @auxBuffer1 , 128)
   idx := 0                      ' start using this as a BYTE-pointer
 
@@ -947,13 +995,7 @@ PUB SEND_AUX_PACKET | idx, wakeUpMode, recTypeEnum, timeOfDayOn, timeOfDaySleep,
   auxBuffer2.byte[idx++] := 0 'reserved
   auxBuffer2.byte[idx++] := interval
   auxBuffer2.byte[idx++] := recordLength
-  case recTypeEnum
-    0 : auxBuffer2.byte[idx++] := 0 ' continuous
-    1 : auxBuffer2.byte[idx++] := 1 ' triggered
-    2 : auxBuffer2.byte[idx++] := 2 ' timed
-    3 : auxBuffer2.byte[idx++] := 3 ' threshold
-    4 : auxBuffer2.byte[idx++] := 4 ' radio
-    OTHER : auxBuffer2.byte[idx++] := 0
+  auxBuffer2.byte[idx++] := recTypeEnum
      
   ' long TWO
   auxBuffer2.byte[idx++] := radioOnDuration
@@ -966,16 +1008,23 @@ PUB SEND_AUX_PACKET | idx, wakeUpMode, recTypeEnum, timeOfDayOn, timeOfDaySleep,
   auxBuffer2[idx++] := dacValue
   auxBuffer2[idx++] := rtcYear * 10000 + rtcMonth  * 100 + rtcDay
   auxBuffer2[idx++] := rtcHour * 10000 + rtcMinute * 100 + rtcSecond
-  auxBuffer2[idx++] := MAG_ACC_TIMER_MS ' reserved
+  auxBuffer2[idx++] := ymd
+  auxBuffer2[idx++] := hms
+  auxBuffer2[idx++] := fixStat
+  auxBuffer2[idx++] := gpsValid
+  auxBuffer2[idx++] := utcValid
+  auxBuffer2[idx++] := edges
+  auxBuffer2[idx++] := MAG_ACC_TIMER_MS 
   auxBuffer2[idx++] := 0 ' reserved
-
   auxBuffer2[idx++] := magAccSampleCnt ' number of samples in this buffer
-  magAccSampleCnt   := 0
 
-  auxIdx        := idx ' the first LONG of data should go here
+  magAccSampleCnt   := 0               ' indicate that we've finally sent this packet
+
+  auxIdx            := idx             ' the first LONG of data should go here
 
   longfill(@auxBuffer1 , 0 , 128)
   auxDataToWrite := MY_TRUE
+  outa[SRAM_MISO] := 0
     
 PUB UPDATE_TIME_AND_DATE | isLeapYear
 '' get the RTC AND GPS time
@@ -1030,11 +1079,12 @@ PUB UPDATE_TIME_AND_DATE | isLeapYear
   hms         := hour * 10_000 + minute * 100 + second 
 
   ' sak added 4/28/15 - for testing in non-gps situations'
-  if fixStat == 0
-    rtcYMD         := rtcYear * 10_000 + rtcMonth  * 100 + rtcDay
-    rtcHMS         := rtcHour * 10_000 + rtcMinute * 100 + rtcSecond
-    ymd := rtcYMD
-    hms := rtcHMS
+  ' removed 22 April 2015 - decided to keep all seismic data stamped with gps time
+'  if fixStat == 0
+'    rtcYMD         := rtcYear * 10_000 + rtcMonth  * 100 + rtcDay
+'    rtcHMS         := rtcHour * 10_000 + rtcMinute * 100 + rtcSecond
+'    ymd := rtcYMD
+'    hms := rtcHMS
 
   cntsAtPPS1  := cntsTemp
   validStatus := fixStat & $FF   ' make sure this only occupies one byte
@@ -1149,6 +1199,9 @@ PUB PRINT_TIME_AND_DATE(display)
     uarts.STR(DEBUG, string("UTC_VALID"))
   else
     uarts.STR(DEBUG, string("UTC_INVALID"))
+
+  uarts.putc(debug, ",")
+  uarts.dec(debug, edges)
 
 
 PUB READ_RTC
@@ -1357,27 +1410,30 @@ PUB PROCESS_UART | idx, pkpA, pkpB, pkpC, cursor
       pkpA := NUM.FROMSTR(@inUartBuf[inUartPtr[1]],NUM#DDEC)+1 
       pkpB := NUM.FROMSTR(@inUartBuf[inUartPtr[2]],NUM#DDEC)+1 
       pkpC := NUM.FROMSTR(@inUartBuf[inUartPtr[3]],NUM#DDEC)+1
-      PEBBLE.OLED_COMMAND(%1100_0000)                   ' set cursor on first space of 2nd line      
-      repeat idx from 0 to 15
-        cursor := 0
-        if pkpA > idx
-          cursor |= %100
-        if pkpB > idx
-          cursor |= %010
-        if pkpC > idx
-          cursor |= %001
-        PEBBLE.OLED_DATA(cursor)
+      if oledOn == 1
+        PEBBLE.OLED_COMMAND(%1100_0000)                   ' set cursor on first space of 2nd line      
+        repeat idx from 0 to 15
+          cursor := 0
+          if pkpA > idx
+            cursor |= %100
+          if pkpB > idx
+            cursor |= %010
+          if pkpC > idx
+            cursor |= %001
+          PEBBLE.OLED_DATA(cursor)
 
 
     LINE_TWO :        '2
       inUartBuf[2+16] := 0                    ' make sure that we have a zero-terminated string that won't exceed OLED length
-      PEBBLE.OLED_WRITE_LINE2(string("                "))  ' clear the line before writing to it.
-      PEBBLE.OLED_WRITE_LINE2(@inUartBuf[inUartPtr[1]])    ' print the message  
+      if oledOn == 1
+        PEBBLE.OLED_WRITE_LINE2(string("                "))  ' clear the line before writing to it.
+        PEBBLE.OLED_WRITE_LINE2(@inUartBuf[inUartPtr[1]])    ' print the message  
 
     LINE_ONE :        '1
       inUartBuf[2+16] := 0                    ' make sure that we have a zero-terminated string that won't exceed OLED length
-      PEBBLE.OLED_WRITE_LINE1(string("                "))  ' clear the line before writing to it.
-      PEBBLE.OLED_WRITE_LINE1(@inUartBuf[inUartPtr[1]])    ' print the message  
+      if oledOn == 1
+        PEBBLE.OLED_WRITE_LINE1(string("                "))  ' clear the line before writing to it.
+        PEBBLE.OLED_WRITE_LINE1(@inUartBuf[inUartPtr[1]])    ' print the message  
                                                '  
     EUI :
       PRINT_EUI
@@ -1385,9 +1441,9 @@ PUB PROCESS_UART | idx, pkpA, pkpB, pkpC, cursor
     OTHER: 
       UARTS.STR(DEBUG, string(13,"$PSCMD,  Unrecognized command."))
 
-  UARTS.STR(DEBUG, string("$PSACK, "))
-  UARTS.PUTC(DEBUG, inUartBuf[0])
-  UARTS.PUTC(DEBUG, CR)
+  'UARTS.STR(DEBUG, string("$PSACK, "))
+  'UARTS.PUTC(DEBUG, inUartBuf[0])
+  'UARTS.PUTC(DEBUG, CR)
   
 PUB PRINT_EUI 
   bytefill(@euiAddr, 0, 8)
@@ -1564,15 +1620,12 @@ PUB GET_GPS_LOCK | idx, response
     PET_WATCHDOG                 ' pet the watchdog
     edgeDetector := ((edgeDetector << 1) | INA[GPS_PPS] ) & %11    
     case edgeDetector 
-      %01 : ' rising edge -> grab phsb
+      %01 : ' rising edge
         idx++
-        cntsTemp := CNT - PHSB
         UPDATE_TIME_AND_DATE
         PRINT_TIME_AND_DATE(TRUE)
         UARTS.PUTC(DEBUG, COMMA)
         UARTS.DEC(DEBUG, idx)
-      %10 : ' falling edge now we can reset phsb since it won't increment until PPS goes high again
-        PHSB := 0
       
     repeat
       response := UBX.READ_AND_PROCESS_BYTE(FALSE)
@@ -1744,9 +1797,6 @@ PUB CAPTURE_VXCO_VALUES | i, t1, risingEdge, t2
 PUB CALIBRATE_GPSDO | highDac, lowDac, highCount, lowCount, error
 ' uset CTRA briefly, to get a measurement of linear drift of the VCXO
 ' and to calculate a value for K our VCXO factor
-  CTRA := %01010 << 26 + EXT_OSC   ' counter A in POSedge mode
-  FRQA := 1                        ' increment once per pulse
-
   uarts.str(DEBUG,string(13,"Calibrating GPSDO."))
   uarts.str(DEBUG,string(13," DAC value   VCXO Meas."))
 
@@ -1832,7 +1882,7 @@ PUB CALIBRATE_GPSDO | highDac, lowDac, highCount, lowCount, error
 
   
 PUB DISPLAY_ON_OLED(line,strPtr)
-  if oledOn
+  if oledOn == 1
     case line
       1 :PEBBLE.OLED_WRITE_LINE1(strPtr)
       2 :PEBBLE.OLED_WRITE_LINE2(strPtr)
@@ -1841,15 +1891,18 @@ PUB BOOT_CONSOLE | startTime, bPressed
 ' boot into console mode.  A button press here puts us into programming mode
 ' no button press and we timout and boot normally
 ' to exit console mode, another button press is required.
+  LAUNCH_SERIAL_COG             ' handle the 2 serial ports- debug and GPS
   PEBBLE.LEDS_ON                ' turn ON  LED2  indicating we are acquiring data
   DIRA[SLAVE_IRQ..SLAVE_SCLK] := 0        ' make sure this cog isn't holding SLAVE lines captive
   DIRA[SLAVE_IRQ] := 1          ' make this an output
   OUTA[SLAVE_IRQ] := 1          ' hold this high so the gumstix doesn't hunt for data
   PEBBLE.OLED_ON                ' turn on and init oled
-  oledOn := TRUE
+  oledOn := 1
   PET_WATCHDOG
 
   PAUSE_MS(100)
+  UARTS.STR(DEBUG,string("Entering Boot Console    "))
+  UARTS.STR(DEBUG,string("Press pebble button to enter program mode."))
   DISPLAY_ON_OLED(1,string("Boot Console    "))
   PEBBLE.LEDS_OFF                ' turn ON  LED2  indicating we are acquiring data
   PAUSE_MS(1000)
@@ -1868,7 +1921,6 @@ PUB BOOT_CONSOLE | startTime, bPressed
     DISPLAY_ON_OLED(1,string("Program Mode    "))
     PAUSE_MS(100)
     DISPLAY_ON_OLED(2,string("Press to Exit   "))
-    LAUNCH_SERIAL_COG             ' handle the 2 serial ports- debug and GPS
     bPressed  := FALSE
     startTime := 0
     repeat until bPressed
@@ -1888,7 +1940,7 @@ PUB BOOT_CONSOLE | startTime, bPressed
   ' if we get out of this loop we should proceed with normal boot
   PEBBLE.LEDS_OFF
   PEBBLE.OLED_OFF
-  oledOn := FALSE
+  oledOn := 0
   
   if serialCogId > 0
     cogstop(serialCogId)
@@ -2102,7 +2154,7 @@ WRITE_AUX_DATA
           
 
 ' declare buffers written  
-          wrbyte  sfalse,        auxFlagPtr             ' indicate the GPS buffer if empty
+          wrbyte  sfalse,        auxFlagPtr             ' indicate the AUX buffer if empty
 
 ' setup things for next time
           mov     auxPtr,        auxBasePtr             ' we always begin at the beginning of the GPS buffer
@@ -2505,7 +2557,8 @@ SETUP_ADC_REGS
           mov     data,         #WCR                    ' put the address into outLong
           call    #WRITE_BYTE                           ' Send it
           
-          mov     data,         #%0_0_1_0_0_0_00        ' set 24-bit enable     
+'          mov     data,         #%0_0_1_0_0_0_00        ' set 24-bit enable     
+          mov     data,         #%0_0_1_0_0_1_00        ' set 24-bit enable, disable PDBUF     
           call    #WRITE_BYTE                           ' Send it
           call    #RAISE_CS                             ' raise CS line
   
