@@ -256,7 +256,7 @@ VAR
   word year, month, day, hour, minute, second, utcValid, gpsValid, fixStat
           
   long msgStart
-  long edges
+  long edges1, edges2
   long rtcYMD, rtcHMS
   long pressTime, releaseTime, onTime
   long menuPressTime, led2Time ' time when the menu button was pressed - use for timeout'
@@ -270,7 +270,7 @@ VAR
   long rtcAddr        ' hub address of 7 bytes containing the RTC time
   long euiAddr        ' hub address of 48 bytes containing the unique ID for this device
   ' keep these in order  ymd, hms, cntsAtPPS are populated in the main cog but need to be passed down to the SPIslave cog
-  long ymd, hms, cntsAtPPS1, validStatus, cntsTemp, accuracy
+  long ymd, hms, cntsAtPPS1, validStatus, cntsTemp, accuracy, oldCnts
 
   ' the next 2 line refers to the HUB storage where things sit before be shifted out to the gumstix
   long auxBuffer1[128]          ' put stuff here while we collect it.  Then move it to aux2 to had over to the SPI cog
@@ -517,6 +517,8 @@ PUB WAKE_SYSTEM(newAcqMode) | displayTime
   PRINT_TIME_AND_DATE(TRUE)
   PET_WATCHDOG
   PAUSE_MS(2000)
+
+  CALIBRATE_GPSDO
 
   UARTS.STR(DEBUG, string(13, "$PSMSG, mainCogId:     "))
   UARTS.DEC(DEBUG, mainCogId)
@@ -820,7 +822,7 @@ PUB GET_AND_PRINT_PARAMETERS
   GET_PARAMETERS_FROM_SRAM
   PRINT_SYSTEM_PARAMETERS                                                     
 
-PUB DO_SOMETHING_USEFUL | rxByte, response
+PUB DO_SOMETHING_USEFUL | rxByte, response, clocksPastPPS, cntsInSecond, edgeError
 ' put things here that need to be done but have some timing flexibility
 ' all of this happens in the top level cog
 
@@ -866,14 +868,29 @@ PUB DO_SOMETHING_USEFUL | rxByte, response
   case edgeDetector 
     %01 : ' rising edge -> grab phsb
       outa[SRAM_MOSI] := 1
-      cntsTemp := CNT - PHSB
-      'if gpsdoCnt == 15
-        edges := PHSA
-        PHSA  := 0
-        'gpsdoCnt := 0
+      cntsTemp      := CNT
+      clocksPastPPS := PHSB
+      edges1        := PHSA
+      PHSA          := 0
+      cntsInSecond  := cntsTemp - oldCnts
+      oldCnts       := cntsTemp
+      cntsTemp      -= clocksPastPPS
       outa[SRAM_MOSI] := 0
-      
-      'gpsdoCnt++
+      UARTS.STR(DEBUG, string(13, "$PSGPS, E: "))
+      UARTS.DEC(DEBUG, edges1)
+      UARTS.STR(DEBUG, string(" C: "))
+      UARTS.DEC(DEBUG, cntsInSecond)
+      UARTS.STR(DEBUG, string(" Er: "))
+      edgeError := (cntsInSecond-100_000_000)/5
+      UARTS.DEC(DEBUG, edgeError)
+
+'      dacNew := dacOld - K * edgeError
+      dacNew := dacOld - K * edgeError
+      PEBBLE.WRITE_TO_DAC(dacNew)
+      dacOld := dacNew
+      UARTS.STR(DEBUG, string(" V: "))
+      UARTS.DEC(DEBUG, dacNew)
+     
       onDuration++
 
       UPDATE_TIME_AND_DATE                   ' KEEP IN MIND WE ALWAYS UPDATE TIME/DATE ON THE PPS following OUR MESSAGE SO WE ARE BEHIND ONE SECOND
@@ -946,8 +963,8 @@ PUB DO_SOMETHING_USEFUL | rxByte, response
 
   ' here we process all bytes sitting in the gps buffer -
   ' and we stay in this repeat until the uart buffer is empty OR we've reached the end of the packet
-  outa[wakeup] := 1
   repeat
+    outa[wakeup] := 1
     response := UBX.READ_AND_PROCESS_BYTE(FALSE)
   until response == -1 OR response == UBX#RXMRAW
   outa[wakeup] := 0
@@ -1013,7 +1030,7 @@ PUB SEND_AUX_PACKET | idx, wakeUpMode, timeOfDayOn, timeOfDaySleep, radioOnDurat
   auxBuffer2[idx++] := fixStat
   auxBuffer2[idx++] := gpsValid
   auxBuffer2[idx++] := utcValid
-  auxBuffer2[idx++] := edges
+  auxBuffer2[idx++] := edges1
   auxBuffer2[idx++] := MAG_ACC_TIMER_MS 
   auxBuffer2[idx++] := 0 ' reserved
   auxBuffer2[idx++] := magAccSampleCnt ' number of samples in this buffer
@@ -1201,7 +1218,7 @@ PUB PRINT_TIME_AND_DATE(display)
     uarts.STR(DEBUG, string("UTC_INVALID"))
 
   uarts.putc(debug, ",")
-  uarts.dec(debug, edges)
+  uarts.dec(debug, edges1)
 
 
 PUB READ_RTC
@@ -1854,9 +1871,10 @@ PUB CALIBRATE_GPSDO | highDac, lowDac, highCount, lowCount, error
   UARTS.STR(DEBUG, string(13, "$PSMSG, Setting DAC value: "))
   uarts.dec(DEBUG,dacValue)
   PEBBLE.WRITE_TO_DAC(dacValue)     ' put a middle of the road value in here to start with
+  dacOld := dacValue
   uarts.putc(DEBUG, 13)
 
-  repeat 
+{  repeat 
     PET_WATCHDOG               ' do this every time through the loop.
     waitpeq(0, constant(|<GPS_PPS), 0)    ' wait for pin to go low
     waitpne(0, constant(|<GPS_PPS), 0)    ' wait for pin to go high
@@ -1879,7 +1897,7 @@ PUB CALIBRATE_GPSDO | highDac, lowDac, highCount, lowCount, error
     uarts.putc(DEBUG, TAB)
     uarts.dec(DEBUG,dacNew)
     uarts.putc(DEBUG, 13)
-
+}
   
 PUB DISPLAY_ON_OLED(line,strPtr)
   if oledOn == 1
