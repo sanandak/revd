@@ -227,7 +227,7 @@ DAT ' oled messages
   awakeMsg   byte   "System Ready.   ", 0
   magnetMsg  byte   "Wake with Magnet", 0
   euiMsg     byte   "SN:             ", 0
-  versionMsg byte   "Version 2.4.pgb ", 0
+  versionMsg byte   "Version 2.5.pgb ", 0
 
 OBJ                                  
   UARTS     : "FullDuplexSerial4portPlus_0v3"       '1 COG for 3 serial ports
@@ -518,7 +518,7 @@ PUB WAKE_SYSTEM(newAcqMode) | displayTime
   PET_WATCHDOG
   PAUSE_MS(2000)
 
-  CALIBRATE_GPSDO
+  'CALIBRATE_GPSDO
 
   UARTS.STR(DEBUG, string(13, "$PSMSG, mainCogId:     "))
   UARTS.DEC(DEBUG, mainCogId)
@@ -964,10 +964,10 @@ PUB DO_SOMETHING_USEFUL | rxByte, response, clocksPastPPS, cntsInSecond, edgeErr
   ' here we process all bytes sitting in the gps buffer -
   ' and we stay in this repeat until the uart buffer is empty OR we've reached the end of the packet
   repeat
-    outa[wakeup] := 1
+    'outa[wakeup] := 1
     response := UBX.READ_AND_PROCESS_BYTE(FALSE)
   until response == -1 OR response == UBX#RXMRAW
-  outa[wakeup] := 0
+  'outa[wakeup] := 0
 
   
   if response == UBX#RXMRAW                            ' have we collected all the data in this second?
@@ -995,7 +995,7 @@ PUB SEND_AUX_PACKET | idx, wakeUpMode, timeOfDayOn, timeOfDaySleep, radioOnDurat
 ' signal the SPI cog that we've got aux data to send
 ' wipe out the buffer so it's ready for next time
 
-  outa[SRAM_MISO] := 1
+  outa[WAKEUP] := 1
   
   UARTS.STR(DEBUG, string(13,"$PSMSG, Sending AUX. "))
 
@@ -1041,7 +1041,7 @@ PUB SEND_AUX_PACKET | idx, wakeUpMode, timeOfDayOn, timeOfDaySleep, radioOnDurat
 
   longfill(@auxBuffer1 , 0 , 128)
   auxDataToWrite := MY_TRUE
-  outa[SRAM_MISO] := 0
+  outa[WAKEUP] := 0
     
 PUB UPDATE_TIME_AND_DATE | isLeapYear
 '' get the RTC AND GPS time
