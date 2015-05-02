@@ -304,7 +304,7 @@ PUB INIT : response
   DIRA[SRAM_MOSI]   := 0
   DIRA[SRAM_MISO]   := 0
   DIRA[SRAM_CLK]    := 0
-
+  GUMSTIX_OFF
 
 
 PUB SET_EXPANDER_TO_LOW_POWER : response 
@@ -795,16 +795,15 @@ PUB WRITE_TO_DAC(newDacValue)| dacCode
 
   OUTA[DAC_CS]  := 0                                    ' lower CS line
   repeat 24
-    OUTA[SHARED_CLK] := 0                                    ' drop clock
+    OUTA[SHARED_CLK]  := 0                                    ' drop clock
     OUTA[SHARED_MOSI] := (dacCode & %01)                      ' place next bit on MOSI
     dacCode >>= 1                                            ' shift right by one
     OUTA[SHARED_CLK] := 1                                    ' raise clock
          
   OUTA[SHARED_MOSI] := 0
-  OUTA[SHARED_CLK] := 0
+  OUTA[SHARED_CLK]  := 0
 
   OUTA[DAC_CS]  := 1                                    ' raise CS line
-
 
 PUB LSM_INIT | lsmPresent
   lsmPresent := 0

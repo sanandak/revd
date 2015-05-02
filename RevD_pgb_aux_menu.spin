@@ -227,7 +227,7 @@ DAT ' oled messages
   awakeMsg   byte   "System Ready.   ", 0
   magnetMsg  byte   "Wake with Magnet", 0
   euiMsg     byte   "SN:             ", 0
-  versionMsg byte   "Version 2.5.pgb ", 0
+  versionMsg byte   "Version 2.3.pgb ", 0
 
 OBJ                                  
   UARTS     : "FullDuplexSerial4portPlus_0v3"       '1 COG for 3 serial ports
@@ -302,12 +302,12 @@ PUB MAIN | bPressed, previousState
   OUTA[RADIO_CS]  := 0
 
   'pebble boot console- only available at startup/reboot
-  BOOT_CONSOLE
+  'BOOT_CONSOLE
 
   mainState := TURNING_ON       ' mainState is NOT stored in SRAM
   acqMode   := BOOT             ' this indicates first boot
 
-
+    
   DIRA[SRAM_MOSI] := 1
   OUTA[SRAM_MOSI] := 0
 
@@ -875,20 +875,21 @@ PUB DO_SOMETHING_USEFUL | rxByte, response, clocksPastPPS, cntsInSecond, edgeErr
       cntsInSecond  := cntsTemp - oldCnts
       oldCnts       := cntsTemp
       cntsTemp      -= clocksPastPPS
-      outa[SRAM_MOSI] := 0
-      UARTS.STR(DEBUG, string(13, "$PSGPS, E: "))
-      UARTS.DEC(DEBUG, edges1)
-      UARTS.STR(DEBUG, string(" C: "))
-      UARTS.DEC(DEBUG, cntsInSecond)
-      UARTS.STR(DEBUG, string(" Er: "))
-      edgeError := (cntsInSecond-100_000_000)/5
-      UARTS.DEC(DEBUG, edgeError)
-
-'      dacNew := dacOld - K * edgeError
+      edgeError := edges1 - cntsInSecond/5 + 155
       dacNew := dacOld - K * edgeError
       PEBBLE.WRITE_TO_DAC(dacNew)
       dacOld := dacNew
-      UARTS.STR(DEBUG, string(" V: "))
+
+      outa[SRAM_MOSI] := 0
+      UARTS.STR(DEBUG, string(13, "$PSGPS, E:"))
+      UARTS.DEC(DEBUG, edges1)
+      UARTS.STR(DEBUG, string(" C:"))
+      UARTS.DEC(DEBUG, cntsInSecond)
+      UARTS.STR(DEBUG, string(" exp:"))
+      UARTS.DEC(DEBUG, cntsInSecond/5)
+      UARTS.STR(DEBUG, string(" Er:"))
+      UARTS.DEC(DEBUG, edgeError)
+      UARTS.STR(DEBUG, string(" V:"))
       UARTS.DEC(DEBUG, dacNew)
      
       onDuration++
@@ -898,7 +899,7 @@ PUB DO_SOMETHING_USEFUL | rxByte, response, clocksPastPPS, cntsInSecond, edgeErr
       if auxDataToWrite == MY_FALSE  ' if shared AUX buffer is empty, send what we've got.
         SEND_AUX_PACKET
         
-      UARTS.STR(DEBUG, string(13, "$PSMSG, menu: "))
+{      UARTS.STR(DEBUG, string(13, "$PSMSG, menu: "))
       UARTS.DEC(DEBUG, menuState)
       UARTS.STR(DEBUG, string(" main: "))
       UARTS.DEC(DEBUG, mainState)
@@ -912,7 +913,7 @@ PUB DO_SOMETHING_USEFUL | rxByte, response, clocksPastPPS, cntsInSecond, edgeErr
         UARTS.STR(DEBUG, string(" off"))
       UARTS.STR(DEBUG, string(" maCnt: "))
       UARTS.DEC(DEBUG, magAccSampleCnt)
-
+}
       case menuState
         MENU_NONE        :
           PRINT_TIME_AND_DATE(FALSE)
@@ -997,7 +998,7 @@ PUB SEND_AUX_PACKET | idx, wakeUpMode, timeOfDayOn, timeOfDaySleep, radioOnDurat
 
   outa[WAKEUP] := 1
   
-  UARTS.STR(DEBUG, string(13,"$PSMSG, Sending AUX. "))
+  'UARTS.STR(DEBUG, string(13,"$PSMSG, Sending AUX. "))
 
   longmove(@auxBuffer2 , @auxBuffer1 , 128)
   idx := 0                      ' start using this as a BYTE-pointer
@@ -1817,11 +1818,24 @@ PUB CALIBRATE_GPSDO | highDac, lowDac, highCount, lowCount, error
   uarts.str(DEBUG,string(13,"Calibrating GPSDO."))
   uarts.str(DEBUG,string(13," DAC value   VCXO Meas."))
 
+' setup the shared SPI
+  DIRA[DAC_CS]      := 1
+  OUTA[DAC_CS]      := 1
+
+  DIRA[SHARED_MOSI] := 1
+  OUTA[SHARED_MOSI] := 0
+
+  DIRA[SHARED_MISO] := 0
+  
+  DIRA[SHARED_CLK]  := 1
+  OUTA[SHARED_CLK]  := 0
+
 ' get a couple readings from the GPSDO to set a linear frequncy/DAC relationship
   uarts.putc(DEBUG, 13)
   highDAC := $BFFF
 '  highDAC := $FFFF
   PEBBLE.WRITE_TO_DAC(highDAC)  ' set DAC to 3/4 full-scale value
+  PET_WATCHDOG               ' do this every time through the loop.
   PAUSE_MS(2000)       ' let it settle
   waitpeq(0, constant(|<GPS_PPS), 0)    ' wait for pin to go low
   waitpne(0, constant(|<GPS_PPS), 0)    ' wait for pin to go high
