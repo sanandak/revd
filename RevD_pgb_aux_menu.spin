@@ -2589,8 +2589,8 @@ SETUP_ADC_REGS
           mov     data,         #WCR                    ' put the address into outLong
           call    #WRITE_BYTE                           ' Send it
           
-'          mov     data,         #%0_0_1_0_0_0_00        ' set 24-bit enable     
-          mov     data,         #%0_0_1_0_0_1_00        ' set 24-bit enable, disable PDBUF     
+          mov     data,         #%0_0_1_0_0_0_00        ' set 24-bit enable     
+          'mov     data,         #%0_0_1_0_0_1_00        ' set 24-bit enable, disable PDBUF     
           call    #WRITE_BYTE                           ' Send it
           call    #RAISE_CS                             ' raise CS line
   
