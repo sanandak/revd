@@ -214,7 +214,7 @@ CON ' timeout constants
   SHUTDOWN_TIMEOUT_MS  =   10_000
   MENU_TIMEOUT_MS      =     4000       ' stay in a menu for this time before timing out'
   BOOT_TIMEOUT_MS      =     5000
-  UART_TIMEOUT_MS      =       25
+  UART_TIMEOUT_MS      =       50
   
   MAG_ACC_INTERVAL     =  MAG_ACC_TIMER_MS    * ONE_MS
   SHUTDOWN_TIMEOUT     =  SHUTDOWN_TIMEOUT_MS * ONE_MS
@@ -240,7 +240,7 @@ VAR
   byte mainCogId, serialCogId, adcCogId, slaveCogId, watchDogCogId
   byte mainState, acqMode, buttonState
   byte gpsdoState, gpsdoCnt
-  byte recTypeEnum
+  byte recTypeEnum, firstBoot
   byte menuState, requestedState
   byte oledOn, onDuration, led1on, led2On
   byte lockType, recordComplete
@@ -289,6 +289,7 @@ PUB MAIN | bPressed, previousState
     
   mainCogId     := cogid
   serialCogId   := -1
+  firstBoot     := TRUE
   CLOCK.INIT(FULL_SPEED/16)       ' provide external crystal freq
 
   START_WATCHDOG
@@ -302,7 +303,7 @@ PUB MAIN | bPressed, previousState
   OUTA[RADIO_CS]  := 0
 
   'pebble boot console- only available at startup/reboot
-  'BOOT_CONSOLE
+  BOOT_CONSOLE
 
   mainState := TURNING_ON       ' mainState is NOT stored in SRAM
   acqMode   := BOOT             ' this indicates first boot
@@ -450,7 +451,7 @@ PUB WAKE_SYSTEM(newAcqMode) | displayTime
 
 
   'PEBBLE.LED1_OFF               ' turn OFF LED1 
-  PEBBLE.LED2_ON                ' turn ON  LED2  indicating we are acquiring data
+  PEBBLE.LED2_ON                ' turn ON  LED2  indicating we've started booting
   led2Time := CNT
   PEBBLE.GUMSTIX_ON             ' sak preferes to have gumstix on right away
   PEBBLE.ANALOG_ON
@@ -518,7 +519,9 @@ PUB WAKE_SYSTEM(newAcqMode) | displayTime
   PET_WATCHDOG
   PAUSE_MS(2000)
 
-  'CALIBRATE_GPSDO
+  if firstBoot
+    CALIBRATE_GPSDO
+    firstBoot := FALSE
 
   UARTS.STR(DEBUG, string(13, "$PSMSG, mainCogId:     "))
   UARTS.DEC(DEBUG, mainCogId)
@@ -546,6 +549,8 @@ PUB WAKE_SYSTEM(newAcqMode) | displayTime
   DISPLAY_ON_OLED(2,@versionMsg)
   UARTS.STR(DEBUG, string(13, "$PSMSG, "))
   UARTS.STR(DEBUG, @versionMsg)
+
+  PEBBLE.LED1_OFF                ' turn OFF LED2  indicating we're done booting
 
 {' P4 pin testing
   STOP_WATCHDOG
@@ -830,20 +835,21 @@ PUB DO_SOMETHING_USEFUL | rxByte, response, clocksPastPPS, cntsInSecond, edgeErr
   ' this should follow the same setup as the ublox I think
    rxByte := uarts.rxcheck(DEBUG)       ' collect byte from DEBUG port
    if rxByte => 32 AND rxByte =< 122         ' only keep printable characters.  No JUNK!
+     outa[radio_cs] := 1
      case uartState
         WAITING_FOR_START :
           if rxByte == "$"                     ' beginning of a new string
             msgStart  := CNT
-            outa[radio_cs] := 1
             inUartIdx := 0
             ptrIdx    := 0
-            bytefill(@inUartBuf, 0, UART_SIZE) ' buffer for all incoming bytes
+            bytefill(@inUartBuf, " ", UART_SIZE) ' buffer for all incoming bytes
             bytefill(@inUartPtr, 0, MAX_COMMANDS) ' contains the index of each field 
             uartState := WAITING_FOR_END
   
         WAITING_FOR_END   :
           if (CNT - msgStart) > UART_TIMEOUT
             UARTS.STR(DEBUG, string(13, "$PSMSG, TO"))
+            outa[radio_cs] := 0
             uartState := WAITING_FOR_START
           
           case rxByte
@@ -854,7 +860,6 @@ PUB DO_SOMETHING_USEFUL | rxByte, response, clocksPastPPS, cntsInSecond, edgeErr
               inUartPtr[++ptrIdx] := inUartIdx <# MAX_COMMANDS
               uartState := WAITING_FOR_END
             "%"   :
-              outa[radio_cs] := 0
               inUartBuf[inUartIdx++ <# UART_SIZE] := 0          ' zero terminate entire string
               PROCESS_UART
               uartState := WAITING_FOR_START
@@ -862,6 +867,8 @@ PUB DO_SOMETHING_USEFUL | rxByte, response, clocksPastPPS, cntsInSecond, edgeErr
               inUartBuf[inUartIdx++ <# UART_SIZE] := rxByte     ' if not, keep adding to it
               uartState := WAITING_FOR_END
   
+     'UARTS.PUTC(DEBUG, inUartBuf[inUartIdx - 1])
+     outa[radio_cs] := 0
 
 
   edgeDetector := ((edgeDetector << 1) | INA[GPS_PPS] ) & %11    
@@ -1444,13 +1451,13 @@ PUB PROCESS_UART | idx, pkpA, pkpB, pkpC, cursor
     LINE_TWO :        '2
       inUartBuf[2+16] := 0                    ' make sure that we have a zero-terminated string that won't exceed OLED length
       if oledOn == 1
-        PEBBLE.OLED_WRITE_LINE2(string("                "))  ' clear the line before writing to it.
+        'PEBBLE.OLED_WRITE_LINE2(string("                "))  ' clear the line before writing to it.
         PEBBLE.OLED_WRITE_LINE2(@inUartBuf[inUartPtr[1]])    ' print the message  
 
     LINE_ONE :        '1
       inUartBuf[2+16] := 0                    ' make sure that we have a zero-terminated string that won't exceed OLED length
       if oledOn == 1
-        PEBBLE.OLED_WRITE_LINE1(string("                "))  ' clear the line before writing to it.
+        'PEBBLE.OLED_WRITE_LINE1(string("                "))  ' clear the line before writing to it.
         PEBBLE.OLED_WRITE_LINE1(@inUartBuf[inUartPtr[1]])    ' print the message  
                                                '  
     EUI :
@@ -1459,6 +1466,8 @@ PUB PROCESS_UART | idx, pkpA, pkpB, pkpC, cursor
     OTHER: 
       UARTS.STR(DEBUG, string(13,"$PSCMD,  Unrecognized command."))
 
+  'UARTS.STR(DEBUG, string(13,"$PSMSG:"))
+  'UARTS.STR(DEBUG, @inUartBuf[inUartPtr[1]])
   'UARTS.STR(DEBUG, string("$PSACK, "))
   'UARTS.PUTC(DEBUG, inUartBuf[0])
   'UARTS.PUTC(DEBUG, CR)
@@ -1815,6 +1824,8 @@ PUB CAPTURE_VXCO_VALUES | i, t1, risingEdge, t2
 PUB CALIBRATE_GPSDO | highDac, lowDac, highCount, lowCount, error
 ' uset CTRA briefly, to get a measurement of linear drift of the VCXO
 ' and to calculate a value for K our VCXO factor
+  DISPLAY_ON_OLED(1,string("   GPSDO Cal    "))
+  DISPLAY_ON_OLED(1,string("Boot Console    "))
   uarts.str(DEBUG,string(13,"Calibrating GPSDO."))
   uarts.str(DEBUG,string(13," DAC value   VCXO Meas."))
 
